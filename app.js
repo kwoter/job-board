@@ -3,9 +3,12 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.4';
 const SUPABASE_URL = 'https://kmxhcvmxeoqglpshzuns.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtteGhjdm14ZW9xZ2xwc2h6dW5zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzODg0MTIsImV4cCI6MjA5NTk2NDQxMn0.-Nm_KAabbu9FQTql81blTmULPivBUnzwXa_eDN5dFao';
 const APP_SERVER_KEY = 'BJQz3w9ft1Eti87gUeqV-izXo7bwjYTCKlCIsc2CM_1XyBEElm7qiK_X8PcxoD311mTE7zeXpn6rFjmHeGlyAoc';
-// Single-user board: the app signs itself in.
+// Single-user board: the Supabase password is derived from the PIN,
+// so nothing secret ships in this file. Wrong PIN = server says no.
 const OWNER_EMAIL = 'media@kwoter.co.uk';
-const OWNER_KEY = 'ember-onyx-49088';
+const PIN_LENGTH = 4;
+const KEY_STORE = 'board-key';
+const BIO_STORE = 'board-bio';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
@@ -23,54 +26,157 @@ let firstRender = true;
 let editingId = null;
 let channel = null;
 let reloadTimer = null;
-let inflightSignIn = null;
+let unlocked = false;
+let lockBusy = false;
+let pinBuffer = '';
+let wrongAttempts = 0;
 
 /* ---------- Service worker ---------- */
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
-/* ---------- Boot ---------- */
-async function ensureSession() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session) return true;
-  // Concurrent callers (boot + auth listener) share one sign-in attempt
-  if (!inflightSignIn) {
-    inflightSignIn = supabase.auth
-      .signInWithPassword({ email: OWNER_EMAIL, password: OWNER_KEY })
-      .then(({ error }) => !error)
-      .finally(() => { inflightSignIn = null; });
-  }
-  return inflightSignIn;
+/* ---------- PIN lock ---------- */
+const lockEl = $('#lock');
+const dotsWrap = $('#pin-dots');
+const pinDots = $$('.pin-dot');
+const lockMsg = $('#lock-msg');
+const numpadEl = $('#numpad');
+
+async function sha256Hex(text) {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+const derivePassword = (pin) => sha256Hex(`jobs-board::${pin}::kwoter`);
+
+function renderDots() {
+  pinDots.forEach((d, i) => d.classList.toggle('filled', i < pinBuffer.length));
 }
 
-async function start() {
-  const splash = $('#splash');
-  const msg = $('#splash-msg');
-  const retry = $('#splash-retry');
-  msg.textContent = '';
-  retry.hidden = true;
-
-  const ok = await ensureSession();
-  if (!ok) {
-    msg.textContent = 'Cannot reach the board. Check your connection.';
-    retry.hidden = false;
+function pressKey(key) {
+  if (lockBusy || unlocked) return;
+  if (key === 'back') {
+    pinBuffer = pinBuffer.slice(0, -1);
+    renderDots();
     return;
   }
+  if (key === 'bio') { bioUnlock(); return; }
+  if (!/^[0-9]$/.test(key) || pinBuffer.length >= PIN_LENGTH) return;
+  lockMsg.textContent = '';
+  pinBuffer += key;
+  renderDots();
+  if (pinBuffer.length === PIN_LENGTH) submitPin();
+}
 
+numpadEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-key]');
+  if (btn) pressKey(btn.dataset.key);
+});
+
+document.addEventListener('keydown', (e) => {
+  if (unlocked || lockEl.hidden) return;
+  if (/^[0-9]$/.test(e.key)) pressKey(e.key);
+  else if (e.key === 'Backspace') pressKey('back');
+});
+
+async function submitPin() {
+  lockBusy = true;
+  const derived = await derivePassword(pinBuffer);
+  const stored = localStorage.getItem(KEY_STORE);
+  let ok;
+  if (stored) {
+    ok = derived === stored;
+  } else {
+    // First unlock on this device: the server is the judge
+    dotsWrap.classList.add('busy');
+    const { error } = await supabase.auth.signInWithPassword({
+      email: OWNER_EMAIL, password: derived,
+    });
+    dotsWrap.classList.remove('busy');
+    if (error && !navigator.onLine) {
+      lockMsg.textContent = 'You are offline. Connect once to set this device up.';
+      pinBuffer = '';
+      renderDots();
+      lockBusy = false;
+      return;
+    }
+    ok = !error;
+    if (ok) localStorage.setItem(KEY_STORE, derived);
+  }
+  if (ok) {
+    wrongAttempts = 0;
+    dotsWrap.classList.add('success');
+    unlockApp(derived);
+  } else {
+    pinFail();
+  }
+}
+
+function pinFail() {
+  wrongAttempts++;
+  dotsWrap.classList.add('error', 'shake');
+  lockMsg.textContent = 'Wrong PIN. Try again.';
+  setTimeout(() => {
+    dotsWrap.classList.remove('error', 'shake');
+    pinBuffer = '';
+    renderDots();
+    if (wrongAttempts >= 3) cooldown(10 * (wrongAttempts - 2));
+    else lockBusy = false;
+  }, 620);
+}
+
+function cooldown(secs) {
+  numpadEl.classList.add('disabled');
+  let left = secs;
+  lockMsg.textContent = `Too many tries. Wait ${left}s.`;
+  const timer = setInterval(() => {
+    left--;
+    if (left <= 0) {
+      clearInterval(timer);
+      numpadEl.classList.remove('disabled');
+      lockMsg.textContent = '';
+      lockBusy = false;
+    } else {
+      lockMsg.textContent = `Too many tries. Wait ${left}s.`;
+    }
+  }, 1000);
+}
+
+async function unlockApp(derived) {
+  unlocked = true;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: OWNER_EMAIL, password: derived,
+    });
+    if (error && navigator.onLine) {
+      // Stored key no longer matches the server: ask for the PIN fresh
+      localStorage.removeItem(KEY_STORE);
+      unlocked = false;
+      lockBusy = false;
+      dotsWrap.classList.remove('success');
+      pinBuffer = '';
+      renderDots();
+      lockMsg.textContent = 'PIN has changed. Enter the new one.';
+      return;
+    }
+  }
+  startApp();
+}
+
+function startApp() {
   $('#header-sub').textContent = `${greeting()} · ${new Date().toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long',
   })}`;
-  await loadJobs();
+  loadJobs();
   subscribeRealtime();
   initBell();
   $('#app-view').hidden = false;
-  splash.classList.add('is-done');
-  setTimeout(() => { splash.hidden = true; }, 400);
+  lockEl.classList.add('is-open');
+  setTimeout(() => { lockEl.hidden = true; }, 460);
   requestAnimationFrame(() => setActiveTab(0));
+  maybeOfferBio();
 }
-
-$('#splash-retry').addEventListener('click', start);
 
 function greeting() {
   const h = new Date().getHours();
@@ -79,10 +185,87 @@ function greeting() {
   return 'Good evening, Louis';
 }
 
-// If the session ever drops mid-use, quietly sign back in.
+// If the session ever drops mid-use, quietly sign back in with the device key.
 supabase.auth.onAuthStateChange((_event, session) => {
-  if (!session) ensureSession();
+  if (!session && unlocked) {
+    const key = localStorage.getItem(KEY_STORE);
+    if (key) supabase.auth.signInWithPassword({ email: OWNER_EMAIL, password: key });
+  }
 });
+
+/* ---------- Face ID / Touch ID (WebAuthn platform authenticator) ---------- */
+const bufToB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const b64ToBuf = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function bioAvailable() {
+  try {
+    return !!window.PublicKeyCredential
+      && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch { return false; }
+}
+
+async function initLock() {
+  if (localStorage.getItem(BIO_STORE) && localStorage.getItem(KEY_STORE) && await bioAvailable()) {
+    $('#bio-key').classList.remove('is-ghost');
+  }
+}
+
+async function bioUnlock() {
+  const credId = localStorage.getItem(BIO_STORE);
+  const key = localStorage.getItem(KEY_STORE);
+  if (!credId || !key) return;
+  lockBusy = true;
+  try {
+    await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ type: 'public-key', id: b64ToBuf(credId), transports: ['internal'] }],
+        userVerification: 'required',
+        timeout: 60000,
+      },
+    });
+    dotsWrap.classList.add('success');
+    pinDots.forEach((d) => d.classList.add('filled'));
+    unlockApp(key);
+  } catch {
+    lockBusy = false;
+    lockMsg.textContent = 'Face ID was cancelled. Use your PIN.';
+  }
+}
+
+async function maybeOfferBio() {
+  if (localStorage.getItem(BIO_STORE)) return;
+  if (!(await bioAvailable())) return;
+  $('#bio-prompt').hidden = false;
+}
+
+$('#bio-enable').addEventListener('click', async () => {
+  try {
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: 'Jobs Board', id: location.hostname },
+        user: {
+          id: crypto.getRandomValues(new Uint8Array(16)),
+          name: 'louis',
+          displayName: 'Louis',
+        },
+        pubKeyCredParams: [
+          { type: 'public-key', alg: -7 },
+          { type: 'public-key', alg: -257 },
+        ],
+        authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
+        timeout: 60000,
+      },
+    });
+    localStorage.setItem(BIO_STORE, bufToB64(cred.rawId));
+    $('#bio-prompt').hidden = true;
+    toast('Face ID enabled for this device');
+  } catch {
+    toast('Could not set up Face ID');
+  }
+});
+$('#bio-dismiss').addEventListener('click', () => { $('#bio-prompt').hidden = true; });
 
 /* ---------- Data ---------- */
 async function loadJobs() {
@@ -602,4 +785,4 @@ function toast(msg) {
   }, 3200);
 }
 
-start();
+initLock();

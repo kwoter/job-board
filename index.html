@@ -26,13 +26,50 @@
     <div class="grain"></div>
   </div>
 
-  <!-- Boot splash -->
-  <div id="splash" class="splash">
-    <div class="splash-mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+  <!-- Lock screen -->
+  <div id="lock" class="lock">
+    <div class="lock-inner">
+      <div class="splash-mark lock-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <p class="lock-title">Enter your PIN</p>
+      <div class="pin-dots" id="pin-dots" aria-label="PIN entry">
+        <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+      </div>
+      <p id="lock-msg" class="lock-msg" role="alert"></p>
+      <div class="numpad" id="numpad">
+        <button data-key="1">1</button>
+        <button data-key="2">2</button>
+        <button data-key="3">3</button>
+        <button data-key="4">4</button>
+        <button data-key="5">5</button>
+        <button data-key="6">6</button>
+        <button data-key="7">7</button>
+        <button data-key="8">8</button>
+        <button data-key="9">9</button>
+        <button data-key="bio" id="bio-key" class="numpad-soft is-ghost" aria-label="Unlock with Face ID">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3H5a2 2 0 0 0-2 2v2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M17 21h2a2 2 0 0 0 2-2v-2"/><path d="M8 10h.01"/><path d="M16 10h.01"/><path d="M9 15.5a4 4 0 0 0 6 0"/></svg>
+        </button>
+        <button data-key="0">0</button>
+        <button data-key="back" class="numpad-soft" aria-label="Delete digit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/></svg>
+        </button>
+      </div>
     </div>
-    <p id="splash-msg" class="splash-msg" role="status"></p>
-    <button id="splash-retry" class="btn-primary" hidden>Try again</button>
+  </div>
+
+  <!-- Face ID enrol prompt -->
+  <div id="bio-prompt" class="bio-prompt" hidden>
+    <div class="bio-prompt-text">
+      <strong>Unlock with Face ID?</strong>
+      <span>Skip the PIN on this device.</span>
+    </div>
+    <div class="bio-prompt-actions">
+      <button id="bio-enable" class="btn-primary">Enable</button>
+      <button id="bio-dismiss" class="icon-btn" aria-label="Not now">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
   </div>
 
   <!-- Board -->
