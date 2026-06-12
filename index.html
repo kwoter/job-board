@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Jobs Board</title>
+  <meta name="description" content="Personal job board">
+  <meta name="theme-color" content="#0F172A">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Jobs">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <!-- Sign in -->
+  <main id="login-view" class="view login-view" hidden>
+    <div class="login-card">
+      <div class="login-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <h1>Jobs Board</h1>
+      <p class="login-sub">Sign in to your board</p>
+      <form id="login-form" novalidate>
+        <label class="field">
+          <span class="field-label">Email</span>
+          <input id="login-email" type="email" autocomplete="username" value="media@kwoter.co.uk" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Password</span>
+          <input id="login-password" type="password" autocomplete="current-password" required>
+        </label>
+        <p id="login-error" class="login-error" role="alert" hidden></p>
+        <button id="login-btn" class="btn-primary" type="submit">
+          <span class="btn-label">Sign in</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+      </form>
+    </div>
+  </main>
+
+  <!-- Board -->
+  <div id="app-view" class="view app-view" hidden>
+    <header class="app-header">
+      <div class="header-title">
+        <h1 class="wordmark">Jobs<span class="wordmark-dot">.</span></h1>
+        <p class="header-sub" id="header-date"></p>
+      </div>
+      <div class="header-actions">
+        <button id="add-desktop" class="btn-primary btn-add-desktop">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New job
+        </button>
+        <button id="bell-btn" class="icon-btn" aria-label="Notifications" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span class="bell-dot" aria-hidden="true"></span>
+        </button>
+        <button id="logout-btn" class="icon-btn" aria-label="Sign out">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs" aria-label="Board columns">
+      <span class="tab-indicator" id="tab-indicator" aria-hidden="true"></span>
+      <button class="tab is-active" data-status="todo">To Do<span class="count" data-count="todo">0</span></button>
+      <button class="tab" data-status="doing">In Progress<span class="count" data-count="doing">0</span></button>
+      <button class="tab" data-status="done">Done<span class="count" data-count="done">0</span></button>
+    </nav>
+
+    <section class="board" id="board">
+      <div class="column" data-status="todo">
+        <header class="column-head">
+          <h2>To Do</h2><span class="count" data-count="todo">0</span>
+        </header>
+        <div class="cards" data-col="todo"></div>
+        <p class="empty" hidden>Nothing queued.</p>
+      </div>
+      <div class="column" data-status="doing">
+        <header class="column-head">
+          <h2>In Progress</h2><span class="count" data-count="doing">0</span>
+        </header>
+        <div class="cards" data-col="doing"></div>
+        <p class="empty" hidden>Nothing on the go.</p>
+      </div>
+      <div class="column" data-status="done">
+        <header class="column-head">
+          <h2>Done</h2><span class="count" data-count="done">0</span>
+        </header>
+        <div class="cards" data-col="done"></div>
+        <p class="empty" hidden>Nothing finished yet.</p>
+      </div>
+    </section>
+
+    <button id="fab" class="fab" aria-label="Add job">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+  </div>
+
+  <!-- Add / edit sheet -->
+  <div id="sheet-backdrop" class="sheet-backdrop" hidden></div>
+  <div id="sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <h2 id="sheet-title">New job</h2>
+      <button id="sheet-close" class="icon-btn" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <form id="job-form" novalidate>
+      <label class="field">
+        <span class="field-label">Job</span>
+        <input id="f-title" type="text" placeholder="What needs doing?" autocomplete="off" required>
+      </label>
+      <label class="field">
+        <span class="field-label">Client or project <em>(optional)</em></span>
+        <input id="f-client" type="text" autocomplete="off">
+      </label>
+      <label class="field">
+        <span class="field-label">Notes <em>(optional)</em></span>
+        <textarea id="f-notes" rows="3"></textarea>
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Due</span>
+          <input id="f-due" type="datetime-local">
+        </label>
+        <label class="field">
+          <span class="field-label">Remind me</span>
+          <select id="f-remind" disabled>
+            <option value="">No reminder</option>
+            <option value="0">At due time</option>
+            <option value="15">15 min before</option>
+            <option value="60">1 hour before</option>
+            <option value="1440">1 day before</option>
+          </select>
+        </label>
+      </div>
+      <div class="field">
+        <span class="field-label">Priority</span>
+        <div class="segmented" id="f-priority" role="radiogroup" aria-label="Priority">
+          <button type="button" data-value="low">Low</button>
+          <button type="button" data-value="normal" class="is-active">Normal</button>
+          <button type="button" data-value="high">High</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label">Status</span>
+        <div class="segmented" id="f-status" role="radiogroup" aria-label="Status">
+          <button type="button" data-value="todo" class="is-active">To Do</button>
+          <button type="button" data-value="doing">In Progress</button>
+          <button type="button" data-value="done">Done</button>
+        </div>
+      </div>
+      <button id="save-btn" class="btn-primary btn-block" type="submit">
+        <span class="btn-label">Save job</span>
+        <span class="spinner" aria-hidden="true"></span>
+      </button>
+      <button id="delete-btn" class="btn-danger" type="button" hidden>Delete job</button>
+    </form>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
