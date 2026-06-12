@@ -1,4 +1,4 @@
-const CACHE = 'jobs-v1';
+const CACHE = 'jobs-v2';
 const SHELL = [
   './',
   './index.html',

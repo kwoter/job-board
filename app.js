@@ -3,70 +3,86 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.4';
 const SUPABASE_URL = 'https://kmxhcvmxeoqglpshzuns.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtteGhjdm14ZW9xZ2xwc2h6dW5zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzODg0MTIsImV4cCI6MjA5NTk2NDQxMn0.-Nm_KAabbu9FQTql81blTmULPivBUnzwXa_eDN5dFao';
 const APP_SERVER_KEY = 'BJQz3w9ft1Eti87gUeqV-izXo7bwjYTCKlCIsc2CM_1XyBEElm7qiK_X8PcxoD311mTE7zeXpn6rFjmHeGlyAoc';
+// Single-user board: the app signs itself in.
+const OWNER_EMAIL = 'media@kwoter.co.uk';
+const OWNER_KEY = 'ember-onyx-49088';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const STATUSES = ['todo', 'doing', 'done'];
 const PRIORITY_WEIGHT = { high: 0, normal: 1, low: 2 };
 
 let jobs = [];
 let knownIds = new Set();
+let prevCounts = { todo: -1, doing: -1, done: -1 };
 let firstRender = true;
 let editingId = null;
 let channel = null;
 let reloadTimer = null;
+let inflightSignIn = null;
 
 /* ---------- Service worker ---------- */
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
-/* ---------- Auth ---------- */
-async function init() {
+/* ---------- Boot ---------- */
+async function ensureSession() {
   const { data: { session } } = await supabase.auth.getSession();
-  setAuthed(!!session);
-  supabase.auth.onAuthStateChange((_event, s) => setAuthed(!!s));
+  if (session) return true;
+  // Concurrent callers (boot + auth listener) share one sign-in attempt
+  if (!inflightSignIn) {
+    inflightSignIn = supabase.auth
+      .signInWithPassword({ email: OWNER_EMAIL, password: OWNER_KEY })
+      .then(({ error }) => !error)
+      .finally(() => { inflightSignIn = null; });
+  }
+  return inflightSignIn;
 }
 
-function setAuthed(on) {
-  $('#login-view').hidden = on;
-  $('#app-view').hidden = !on;
-  if (on) {
-    $('#header-date').textContent = new Date().toLocaleDateString('en-GB', {
-      weekday: 'long', day: 'numeric', month: 'long',
-    });
-    loadJobs();
-    subscribeRealtime();
-    initBell();
-  } else if (channel) {
-    supabase.removeChannel(channel);
-    channel = null;
+async function start() {
+  const splash = $('#splash');
+  const msg = $('#splash-msg');
+  const retry = $('#splash-retry');
+  msg.textContent = '';
+  retry.hidden = true;
+
+  const ok = await ensureSession();
+  if (!ok) {
+    msg.textContent = 'Cannot reach the board. Check your connection.';
+    retry.hidden = false;
+    return;
   }
+
+  $('#header-sub').textContent = `${greeting()} · ${new Date().toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  })}`;
+  await loadJobs();
+  subscribeRealtime();
+  initBell();
+  $('#app-view').hidden = false;
+  splash.classList.add('is-done');
+  setTimeout(() => { splash.hidden = true; }, 400);
+  requestAnimationFrame(() => setActiveTab(0));
 }
 
-$('#login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const btn = $('#login-btn');
-  const errEl = $('#login-error');
-  errEl.hidden = true;
-  btn.classList.add('is-loading');
-  const { error } = await supabase.auth.signInWithPassword({
-    email: $('#login-email').value.trim(),
-    password: $('#login-password').value,
-  });
-  btn.classList.remove('is-loading');
-  if (error) {
-    errEl.textContent = 'That did not work. Check the password and try again.';
-    errEl.hidden = false;
-    $('.login-card').classList.remove('shake');
-    requestAnimationFrame(() => $('.login-card').classList.add('shake'));
-  }
+$('#splash-retry').addEventListener('click', start);
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning, Louis';
+  if (h < 18) return 'Good afternoon, Louis';
+  return 'Good evening, Louis';
+}
+
+// If the session ever drops mid-use, quietly sign back in.
+supabase.auth.onAuthStateChange((_event, session) => {
+  if (!session) ensureSession();
 });
-
-$('#logout-btn').addEventListener('click', () => supabase.auth.signOut());
 
 /* ---------- Data ---------- */
 async function loadJobs() {
@@ -105,6 +121,14 @@ function sortJobs(list) {
 
 function render() {
   const finePointer = matchMedia('(pointer: fine)').matches;
+  const animate = !firstRender && !reducedMotion();
+
+  // FLIP: remember where every card sits before the rebuild
+  const before = new Map();
+  if (animate) {
+    $$('.card').forEach((el) => before.set(el.dataset.id, el.getBoundingClientRect()));
+  }
+
   for (const status of STATUSES) {
     const col = $(`.cards[data-col="${status}"]`);
     const list = sortJobs(jobs.filter((j) => j.status === status));
@@ -113,16 +137,73 @@ function render() {
       const el = cardEl(job, finePointer);
       if (!knownIds.has(job.id)) {
         el.classList.add('is-new');
-        el.style.animationDelay = firstRender ? `${Math.min(i * 40, 320)}ms` : '0ms';
+        el.style.animationDelay = firstRender ? `${Math.min(i * 45, 360)}ms` : '0ms';
       }
       col.appendChild(el);
     });
     const column = col.closest('.column');
     $('.empty', column).hidden = list.length > 0;
-    $$(`.count[data-count="${status}"]`).forEach((c) => { c.textContent = list.length; });
+    $$(`.count[data-count="${status}"]`).forEach((c) => {
+      c.textContent = list.length;
+      if (prevCounts[status] !== -1 && prevCounts[status] !== list.length) {
+        c.classList.remove('pop');
+        requestAnimationFrame(() => c.classList.add('pop'));
+      }
+    });
+    prevCounts[status] = list.length;
   }
+
+  // FLIP: glide moved cards from their old spot to the new one
+  if (animate) {
+    $$('.card').forEach((el) => {
+      const a = before.get(el.dataset.id);
+      if (!a) return;
+      const b = el.getBoundingClientRect();
+      const dx = a.left - b.left;
+      const dy = a.top - b.top;
+      if (dx || dy) {
+        el.animate(
+          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }],
+          { duration: 340, easing: 'cubic-bezier(0.32, 0.72, 0.24, 1)' }
+        );
+      }
+    });
+  }
+
+  renderStats();
   knownIds = new Set(jobs.map((j) => j.id));
   firstRender = false;
+}
+
+function renderStats() {
+  const now = new Date();
+  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const open = jobs.filter((j) => j.status !== 'done');
+  const overdue = open.filter((j) => j.due_at && new Date(j.due_at) < now);
+  const dueToday = open.filter((j) => {
+    if (!j.due_at) return false;
+    const d = new Date(j.due_at);
+    return d >= now && d < endOfDay;
+  });
+
+  const stats = $('#stats');
+  stats.replaceChildren();
+  const add = (cls, n, label, dot) => {
+    const el = document.createElement('span');
+    el.className = `stat ${cls}`.trim();
+    if (dot) {
+      const d = document.createElement('span');
+      d.className = `status-dot ${dot}`;
+      el.appendChild(d);
+    }
+    const strong = document.createElement('strong');
+    strong.textContent = n;
+    el.append(strong, document.createTextNode(` ${label}`));
+    stats.appendChild(el);
+  };
+  if (open.length) add('', open.length, open.length === 1 ? 'open job' : 'open jobs', 'dot-todo');
+  if (dueToday.length) add('stat-amber', dueToday.length, 'due today');
+  if (overdue.length) add('stat-red', overdue.length, 'overdue');
 }
 
 function cardEl(job, draggable) {
@@ -230,7 +311,7 @@ async function toggleDone(job, el, btn) {
   }
   btn.classList.add('is-ticked');
   el.classList.add('is-leaving');
-  setTimeout(() => updateJob(job.id, { status: 'done' }), 320);
+  setTimeout(() => updateJob(job.id, { status: 'done' }), 340);
 }
 
 async function updateJob(id, patch) {
@@ -291,13 +372,13 @@ function openSheet(job = null) {
     sheet.classList.add('is-open');
     backdrop.classList.add('is-open');
   });
-  if (!job) setTimeout(() => $('#f-title').focus({ preventScroll: true }), 360);
+  if (!job) setTimeout(() => $('#f-title').focus({ preventScroll: true }), 380);
 }
 
 function closeSheet() {
   sheet.classList.remove('is-open');
   backdrop.classList.remove('is-open');
-  setTimeout(() => { sheet.hidden = true; backdrop.hidden = true; }, 340);
+  setTimeout(() => { sheet.hidden = true; backdrop.hidden = true; }, 360);
 }
 
 function syncRemindSelect() {
@@ -334,11 +415,10 @@ $('#job-form').addEventListener('submit', async (e) => {
     notes: $('#f-notes').value.trim() || null,
     due_at: due ? due.toISOString() : null,
     remind_at: remindAt,
-    reminded_at: remindAt && Date.parse(remindAt) > Date.now() ? null : undefined,
     priority: segValue('f-priority') ?? 'normal',
     status: segValue('f-status') ?? 'todo',
   };
-  if (record.reminded_at === undefined) delete record.reminded_at;
+  if (remindAt && Date.parse(remindAt) > Date.now()) record.reminded_at = null;
 
   const btn = $('#save-btn');
   btn.classList.add('is-loading');
@@ -396,7 +476,7 @@ tabs.forEach((tab, i) => {
     setActiveTab(i);
     board.scrollTo({
       left: i * board.clientWidth,
-      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      behavior: reducedMotion() ? 'auto' : 'smooth',
     });
   });
 });
@@ -414,7 +494,6 @@ window.addEventListener('resize', () => {
   const idx = tabs.findIndex((t) => t.classList.contains('is-active'));
   if (idx >= 0) setActiveTab(idx);
 });
-requestAnimationFrame(() => setActiveTab(0));
 
 /* ---------- Drag and drop (desktop) ---------- */
 $$('.cards').forEach((col) => {
@@ -523,4 +602,4 @@ function toast(msg) {
   }, 3200);
 }
 
-init();
+start();
