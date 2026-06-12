@@ -23,6 +23,8 @@
     <div class="aurora aurora-a"></div>
     <div class="aurora aurora-b"></div>
     <div class="aurora aurora-c"></div>
+    <div class="dots"></div>
+    <div class="vignette"></div>
     <div class="grain"></div>
   </div>
 
@@ -77,7 +79,6 @@
     <header class="app-header">
       <div class="header-title">
         <h1 class="wordmark">Jobs<span class="wordmark-dot">.</span></h1>
-        <p class="header-sub" id="header-sub"></p>
       </div>
       <div class="header-actions">
         <button id="add-desktop" class="btn-primary btn-add-desktop">
@@ -91,7 +92,32 @@
       </div>
     </header>
 
+    <section class="hero">
+      <div class="hero-text">
+        <h2 class="hero-greeting" id="hero-greeting"></h2>
+        <p class="hero-date" id="hero-date"></p>
+      </div>
+      <div class="ring" id="ring" hidden>
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <defs>
+            <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#4D8DFF"/>
+              <stop offset="1" stop-color="#34D399"/>
+            </linearGradient>
+          </defs>
+          <circle class="ring-track" cx="32" cy="32" r="27"/>
+          <circle class="ring-fill" id="ring-fill" cx="32" cy="32" r="27"/>
+        </svg>
+        <div class="ring-center">
+          <span id="ring-num">0/0</span>
+          <small>today</small>
+        </div>
+      </div>
+    </section>
+
     <div class="stats" id="stats" aria-live="polite"></div>
+
+    <section id="upnext" class="upnext" hidden></section>
 
     <nav class="tabs" id="tabs" aria-label="Board columns">
       <span class="tab-indicator" id="tab-indicator" aria-hidden="true"></span>

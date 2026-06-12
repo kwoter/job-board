@@ -165,9 +165,15 @@ async function unlockApp(derived) {
 }
 
 function startApp() {
-  $('#header-sub').textContent = `${greeting()} · ${new Date().toLocaleDateString('en-GB', {
+  const g = $('#hero-greeting');
+  g.textContent = greeting();
+  const dot = document.createElement('span');
+  dot.className = 'wordmark-dot';
+  dot.textContent = '.';
+  g.appendChild(dot);
+  $('#hero-date').textContent = new Date().toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long',
-  })}`;
+  });
   loadJobs();
   subscribeRealtime();
   initBell();
@@ -354,8 +360,128 @@ function render() {
   }
 
   renderStats();
+  renderHero();
   knownIds = new Set(jobs.map((j) => j.id));
   firstRender = false;
+}
+
+function renderHero() {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endOfDay = new Date(startOfDay.getTime() + 86400000);
+  const open = jobs.filter((j) => j.status !== 'done');
+  const doneToday = jobs.filter((j) =>
+    j.status === 'done' && j.completed_at && new Date(j.completed_at) >= startOfDay
+  );
+  const onPlateToday = open.filter((j) => j.due_at && new Date(j.due_at) < endOfDay);
+
+  // Progress ring: today's workload
+  const total = doneToday.length + onPlateToday.length;
+  const ring = $('#ring');
+  if (!total) {
+    ring.hidden = true;
+  } else {
+    ring.hidden = false;
+    const C = 2 * Math.PI * 27;
+    const frac = doneToday.length / total;
+    const fill = $('#ring-fill');
+    fill.style.strokeDashoffset = `${C * (1 - Math.max(0.015, frac))}`;
+    $('#ring-num').textContent = `${doneToday.length}/${total}`;
+  }
+
+  // Up next: the most urgent open job
+  const next = sortJobs(open)[0];
+  const wrap = $('#upnext');
+  wrap.replaceChildren();
+  wrap.hidden = !next;
+  if (next) wrap.appendChild(upnextCard(next));
+}
+
+function upnextCard(job) {
+  const card = document.createElement('div');
+  card.className = 'upnext-card';
+
+  const info = document.createElement('div');
+  info.className = 'upnext-info';
+
+  const label = document.createElement('span');
+  label.className = 'upnext-label';
+  label.innerHTML = '<span class="pulse-dot"></span>Up next';
+
+  const title = document.createElement('h3');
+  title.className = 'upnext-title';
+  title.textContent = job.title;
+
+  const meta = document.createElement('p');
+  meta.className = 'upnext-meta';
+  if (job.client) {
+    const c = document.createElement('span');
+    c.textContent = job.client;
+    meta.appendChild(c);
+  }
+  if (job.due_at) {
+    if (job.client) meta.appendChild(document.createTextNode('·'));
+    const { label: dueText, cls } = dueInfo(job.due_at, job.status);
+    const d = document.createElement('span');
+    d.className = cls;
+    d.textContent = dueText;
+    meta.appendChild(d);
+  }
+
+  info.append(label, title);
+  if (meta.children.length) info.appendChild(meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'upnext-actions';
+  if (job.status === 'todo') {
+    const startBtn = document.createElement('button');
+    startBtn.className = 'upnext-start';
+    startBtn.textContent = 'Start';
+    startBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      updateJob(job.id, { status: 'doing' });
+      toast('Moved to Doing');
+    });
+    actions.appendChild(startBtn);
+  }
+  const doneBtn = document.createElement('button');
+  doneBtn.className = 'upnext-done';
+  doneBtn.setAttribute('aria-label', 'Mark as done');
+  doneBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  doneBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const r = doneBtn.getBoundingClientRect();
+    burst(r.left + r.width / 2, r.top + r.height / 2);
+    updateJob(job.id, { status: 'done' });
+  });
+  actions.appendChild(doneBtn);
+
+  card.append(info, actions);
+  card.addEventListener('click', () => openSheet(job));
+  return card;
+}
+
+/* ---------- Completion burst ---------- */
+function burst(x, y) {
+  if (reducedMotion()) return;
+  const colours = ['#34D399', '#4D8DFF', '#FBBF24'];
+  for (let i = 0; i < 11; i++) {
+    const p = document.createElement('span');
+    p.className = 'particle';
+    p.style.left = `${x}px`;
+    p.style.top = `${y}px`;
+    p.style.background = colours[i % colours.length];
+    document.body.appendChild(p);
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 26 + Math.random() * 30;
+    p.animate(
+      [
+        { transform: 'translate(-50%, -50%) scale(1)', opacity: 1 },
+        { transform: `translate(calc(-50% + ${Math.cos(ang) * dist}px), calc(-50% + ${Math.sin(ang) * dist}px)) scale(0.15)`, opacity: 0 },
+      ],
+      { duration: 540 + Math.random() * 240, easing: 'cubic-bezier(0.16, 0.84, 0.44, 1)' }
+    ).onfinish = () => p.remove();
+  }
 }
 
 function renderStats() {
@@ -420,6 +546,8 @@ function cardEl(job, draggable) {
 
   const meta = document.createElement('div');
   meta.className = 'card-meta';
+  if (job.priority === 'high') meta.appendChild(chip('High', 'flag', 'flag-high'));
+  if (job.priority === 'low') meta.appendChild(chip('Low', 'flag', 'flag-low'));
   if (job.client) meta.appendChild(chip(job.client, 'tag'));
   if (job.due_at) {
     const { label, cls } = dueInfo(job.due_at, job.status);
@@ -446,6 +574,7 @@ function cardEl(job, draggable) {
 }
 
 const ICONS = {
+  flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
   tag: '<path d="M20.59 13.41 12 22 2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/>',
   clock: '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
@@ -465,8 +594,10 @@ function dueInfo(iso, status) {
   const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
   const dayDiff = Math.round((startOf(d) - startOf(now)) / 86400000);
+  const diffMs = d - now;
   let label;
-  if (dayDiff === 0) label = `Today ${time}`;
+  if (status !== 'done' && diffMs > 0 && diffMs < 3600000) label = `in ${Math.max(1, Math.round(diffMs / 60000))} min`;
+  else if (dayDiff === 0) label = `Today ${time}`;
   else if (dayDiff === 1) label = `Tomorrow ${time}`;
   else label = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) + (time !== '00:00' ? ` ${time}` : '');
   let cls = '';
@@ -493,12 +624,19 @@ async function toggleDone(job, el, btn) {
     return;
   }
   btn.classList.add('is-ticked');
+  const r = btn.getBoundingClientRect();
+  burst(r.left + r.width / 2, r.top + r.height / 2);
   el.classList.add('is-leaving');
   setTimeout(() => updateJob(job.id, { status: 'done' }), 340);
 }
 
 async function updateJob(id, patch) {
   const local = jobs.find((j) => j.id === id);
+  if (patch.status === 'done' && local?.status !== 'done') {
+    patch.completed_at = new Date().toISOString();
+  } else if (patch.status && patch.status !== 'done') {
+    patch.completed_at = null;
+  }
   if (local) Object.assign(local, patch);
   render();
   const { error } = await supabase.from('board_jobs').update(patch).eq('id', id);
@@ -602,6 +740,13 @@ $('#job-form').addEventListener('submit', async (e) => {
     status: segValue('f-status') ?? 'todo',
   };
   if (remindAt && Date.parse(remindAt) > Date.now()) record.reminded_at = null;
+
+  const original = editingId ? jobs.find((j) => j.id === editingId) : null;
+  if (record.status === 'done' && original?.status !== 'done') {
+    record.completed_at = new Date().toISOString();
+  } else if (record.status !== 'done') {
+    record.completed_at = null;
+  }
 
   const btn = $('#save-btn');
   btn.classList.add('is-loading');
@@ -784,5 +929,10 @@ function toast(msg) {
     setTimeout(() => { el.hidden = true; }, 260);
   }, 3200);
 }
+
+// Keep countdown chips and the ring honest as time passes
+setInterval(() => {
+  if (unlocked && !document.hidden) render();
+}, 60000);
 
 initLock();
