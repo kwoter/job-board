@@ -39,6 +39,10 @@ export function initNotes({ supabase, toast }) {
   let previousInkTool = 'fountain';
   let spaceHeld = false;
   let mousePan = null;
+  let penDown = false;
+  let lastPenAt = 0;
+  let penSeen = false;
+  let touchTap = null;
 
   const toolPreset = {
     fountain: { width: 1, opacity: 1, composite: 'source-over' },
@@ -46,7 +50,26 @@ export function initNotes({ supabase, toast }) {
     marker: { width: 2.8, opacity: .9, composite: 'source-over' },
     highlighter: { width: 5.4, opacity: .28, composite: 'multiply' },
     eraser: { width: 7, opacity: 1, composite: 'destination-out' },
+    fill: { width: 1, opacity: 1, composite: 'source-over' },
   };
+
+  // A palm landing on the glass arrives as a touch pointer. While the Pencil is
+  // in use — and for a moment after it lifts — touch is ignored completely.
+  const PALM_GRACE_MS = 900;
+  const PALM_CONTACT = 38;
+
+  function ignoreTouch(event) {
+    if (penDown || Date.now() - lastPenAt < PALM_GRACE_MS) return true;
+    if (!penSeen) return false;
+    return (event.width || 0) > PALM_CONTACT || (event.height || 0) > PALM_CONTACT;
+  }
+
+  function dropTouches() {
+    touchPointers.clear();
+    panGesture = null;
+    pinchGesture = null;
+    touchTap = null;
+  }
 
   function switchScreen(name) {
     const isNotes = name === 'notes';
@@ -326,8 +349,17 @@ export function initNotes({ supabase, toast }) {
   }
 
   function beginPointer(event) {
-    const barrelErase = event.pointerType === 'pen' && (event.button === 2 || event.button === 5);
-    if (event.button !== undefined && event.button !== 0 && !barrelErase) return;
+    if (event.button !== undefined && event.button !== 0) return;
+    if (event.pointerType === 'pen') {
+      penSeen = true;
+      penDown = true;
+      lastPenAt = Date.now();
+      if (touchPointers.size) { dropTouches(); redraw(); }
+    }
+    if (event.pointerType === 'touch' && ignoreTouch(event)) {
+      event.preventDefault();
+      return;
+    }
     event.preventDefault();
     canvas.setPointerCapture?.(event.pointerId);
     if (event.pointerType === 'touch') {
@@ -336,7 +368,9 @@ export function initNotes({ supabase, toast }) {
       if (touchPointers.size === 1) {
         panGesture = { start: point, camera: { ...camera } };
         pinchGesture = null;
+        touchTap = { pointerId: event.pointerId, start: point, at: Date.now() };
       } else if (touchPointers.size >= 2) {
+        touchTap = null;
         startPinch();
       }
       return;
@@ -345,7 +379,10 @@ export function initNotes({ supabase, toast }) {
       mousePan = { pointerId: event.pointerId, start: screenPoint(event), camera: { ...camera } };
       return;
     }
-    if (barrelErase) setTool('eraser');
+    if (tool === 'fill') {
+      fillAt(worldPoint(event));
+      return;
+    }
     drawingPointerId = event.pointerId;
     currentStroke = {
       tool,
@@ -357,10 +394,13 @@ export function initNotes({ supabase, toast }) {
   }
 
   function movePointer(event) {
+    if (event.pointerType === 'pen') lastPenAt = Date.now();
     if (event.pointerType === 'touch') {
       if (!touchPointers.has(event.pointerId)) return;
       event.preventDefault();
       const nextPoint = screenPoint(event);
+      if (touchTap && touchTap.pointerId === event.pointerId
+        && pointDistance(touchTap.start, nextPoint) > 7) touchTap = null;
       touchPointers.set(event.pointerId, nextPoint);
       if (touchPointers.size >= 2 && pinchGesture) {
         const [a, b] = [...touchPointers.values()];
@@ -388,7 +428,8 @@ export function initNotes({ supabase, toast }) {
     }
     if (!currentStroke || event.pointerId !== drawingPointerId) return;
     event.preventDefault();
-    const events = event.getCoalescedEvents?.() || [event];
+    const coalesced = event.getCoalescedEvents?.();
+    const events = coalesced?.length ? coalesced : [event];
     for (const item of events) {
       const point = worldPoint(item);
       const previous = currentStroke.points[currentStroke.points.length - 1];
@@ -400,10 +441,26 @@ export function initNotes({ supabase, toast }) {
   }
 
   function endPointer(event) {
+    if (event.pointerType === 'pen') {
+      penDown = false;
+      lastPenAt = Date.now();
+    }
     if (event.pointerType === 'touch') {
       if (!touchPointers.has(event.pointerId)) return;
       event.preventDefault();
+      const tap = touchTap && touchTap.pointerId === event.pointerId
+        && Date.now() - touchTap.at < 320
+        ? touchPointers.get(event.pointerId)
+        : null;
       touchPointers.delete(event.pointerId);
+      if (tap && tool === 'fill' && !penSeen && touchPointers.size === 0) {
+        touchTap = null;
+        panGesture = null;
+        pinchGesture = null;
+        fillAt({ x: camera.x + tap.x / camera.zoom, y: camera.y + tap.y / camera.zoom });
+        return;
+      }
+      touchTap = null;
       if (touchPointers.size >= 2) {
         startPinch();
       } else if (touchPointers.size === 1) {
@@ -481,7 +538,7 @@ export function initNotes({ supabase, toast }) {
       y: (point.y - camera.y) * camera.zoom * dpr,
     });
     const strokeScale = camera.zoom * dpr;
-    strokes.forEach((stroke) => paintStroke(ctx, stroke, map, strokeScale));
+    paintStrokes(ctx, strokes, map, strokeScale);
     if (liveStroke) paintStroke(ctx, liveStroke, map, strokeScale);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
@@ -489,17 +546,51 @@ export function initNotes({ supabase, toast }) {
     $('#zoom-level').textContent = `${Math.round(camera.zoom * 100)}%`;
   }
 
+  function themedColour(value, displayTheme) {
+    let result = value || '#162034';
+    if (displayTheme === 'dark' && result.toUpperCase() === '#162034') result = '#F3F4F6';
+    if (displayTheme === 'light' && result.toUpperCase() === '#F3F4F6') result = '#162034';
+    return result;
+  }
+
+  function paintFill(target, stroke, map, displayTheme) {
+    const contours = stroke.contours || [];
+    if (!contours.length) return;
+    target.save();
+    target.globalCompositeOperation = 'source-over';
+    target.globalAlpha = stroke.opacity ?? 1;
+    target.fillStyle = themedColour(stroke.colour, displayTheme);
+    target.beginPath();
+    for (const loop of contours) {
+      if (!loop || loop.length < 3) continue;
+      const start = map(loop[0]);
+      target.moveTo(start.x, start.y);
+      for (let i = 1; i < loop.length; i++) {
+        const point = map(loop[i]);
+        target.lineTo(point.x, point.y);
+      }
+      target.closePath();
+    }
+    target.fill('evenodd');
+    target.restore();
+  }
+
+  // Fills sit under the ink, whatever order they were laid down in, so a fill
+  // can never bury the lines it was poured between.
+  function paintStrokes(target, list, map, strokeScale = 1, displayTheme = paperTheme) {
+    for (const stroke of list) if (stroke.tool === 'fill') paintFill(target, stroke, map, displayTheme);
+    for (const stroke of list) if (stroke.tool !== 'fill') paintStroke(target, stroke, map, strokeScale, displayTheme);
+  }
+
   function paintStroke(target, stroke, map, strokeScale = 1, displayTheme = paperTheme) {
+    if (stroke.tool === 'fill') { paintFill(target, stroke, map, displayTheme); return; }
     const preset = toolPreset[stroke.tool] || toolPreset.fountain;
     const points = stroke.points || [];
     if (points.length < 2) return;
     target.save();
     target.globalCompositeOperation = preset.composite;
     target.globalAlpha = preset.opacity;
-    let strokeColour = stroke.colour || '#162034';
-    if (displayTheme === 'dark' && strokeColour.toUpperCase() === '#162034') strokeColour = '#F3F4F6';
-    if (displayTheme === 'light' && strokeColour.toUpperCase() === '#F3F4F6') strokeColour = '#162034';
-    target.strokeStyle = strokeColour;
+    target.strokeStyle = themedColour(stroke.colour, displayTheme);
     target.lineCap = 'round';
     target.lineJoin = 'round';
     const base = Math.max(.55, Number(stroke.size || 4) * preset.width * strokeScale);
@@ -532,6 +623,215 @@ export function initNotes({ supabase, toast }) {
     target.restore();
   }
 
+
+  // ---- Fill --------------------------------------------------------------
+  // Rasterises the ink around the tap, floods the enclosed gap, then traces the
+  // flooded pixels back into vector outlines so the fill stays sharp at any zoom.
+  const FILL_RASTER_MAX = 1500;
+  const FILL_ALPHA_GATE = 24;
+  const FILL_MAX_EDGES = 260000;
+  const FILL_MAX_POINTS = 6000;
+
+  function simplifyPath(points, tolerance) {
+    if (points.length < 3) return points;
+    const keep = new Uint8Array(points.length);
+    keep[0] = 1;
+    keep[points.length - 1] = 1;
+    const stack = [[0, points.length - 1]];
+    while (stack.length) {
+      const [first, last] = stack.pop();
+      if (last - first < 2) continue;
+      const [ax, ay] = points[first];
+      const [bx, by] = points[last];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const length = Math.hypot(dx, dy);
+      let best = -1;
+      let bestDistance = tolerance;
+      for (let i = first + 1; i < last; i++) {
+        const [px, py] = points[i];
+        const distance = length < 1e-6
+          ? Math.hypot(px - ax, py - ay)
+          : Math.abs(dy * px - dx * py + bx * ay - by * ax) / length;
+        if (distance > bestDistance) { bestDistance = distance; best = i; }
+      }
+      if (best > 0) {
+        keep[best] = 1;
+        stack.push([first, best], [best, last]);
+      }
+    }
+    const result = [];
+    for (let i = 0; i < points.length; i++) if (keep[i]) result.push(points[i]);
+    return result;
+  }
+
+  // A closed ring has to be cut before it can be simplified — run it end to end
+  // and every vertex measures zero from a zero-length baseline, so the ring
+  // collapses to a single point.
+  function simplifyLoop(points, tolerance) {
+    if (points.length < 8) return points;
+    const [ax, ay] = points[0];
+    let far = 0;
+    let farDistance = -1;
+    for (let i = 1; i < points.length; i++) {
+      const distance = Math.hypot(points[i][0] - ax, points[i][1] - ay);
+      if (distance > farDistance) { farDistance = distance; far = i; }
+    }
+    if (far < 2 || far > points.length - 2) return points;
+    const head = simplifyPath(points.slice(0, far + 1), tolerance);
+    const tail = simplifyPath([...points.slice(far), points[0]], tolerance);
+    const ring = [...head.slice(0, -1), ...tail.slice(0, -1)];
+    return ring.length >= 3 ? ring : points;
+  }
+
+  function loopArea(loop) {
+    let total = 0;
+    for (let i = 0; i < loop.length; i++) {
+      const [ax, ay] = loop[i];
+      const [bx, by] = loop[(i + 1) % loop.length];
+      total += ax * by - bx * ay;
+    }
+    return Math.abs(total) / 2;
+  }
+
+  function fillAt(world) {
+    if (!active) return;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+
+    const margin = .3;
+    const viewWidth = rect.width / camera.zoom;
+    const viewHeight = rect.height / camera.zoom;
+    const originX = camera.x - viewWidth * margin;
+    const originY = camera.y - viewHeight * margin;
+    const worldWidth = viewWidth * (1 + margin * 2);
+    const worldHeight = viewHeight * (1 + margin * 2);
+    const scale = Math.min(FILL_RASTER_MAX / worldWidth, FILL_RASTER_MAX / worldHeight, 2);
+    const width = Math.max(8, Math.round(worldWidth * scale));
+    const height = Math.max(8, Math.round(worldHeight * scale));
+    const seedX = Math.round((world.x - originX) * scale);
+    const seedY = Math.round((world.y - originY) * scale);
+    if (seedX < 1 || seedY < 1 || seedX >= width - 1 || seedY >= height - 1) return;
+
+    const buffer = document.createElement('canvas');
+    buffer.width = width;
+    buffer.height = height;
+    const bufferCtx = buffer.getContext('2d', { willReadFrequently: true });
+    const map = (point) => ({ x: (point.x - originX) * scale, y: (point.y - originY) * scale });
+    for (const stroke of strokes) {
+      if (stroke.tool === 'fill') continue;   // earlier fills are not walls
+      paintStroke(bufferCtx, stroke, map, scale);
+    }
+    const pixels = bufferCtx.getImageData(0, 0, width, height).data;
+    const area = width * height;
+    const seed = seedY * width + seedX;
+    if (pixels[seed * 4 + 3] >= FILL_ALPHA_GATE) {
+      toast('Tap inside a gap, not on a line');
+      return;
+    }
+
+    const inside = new Uint8Array(area);
+    const stack = new Int32Array(area);
+    let top = 0;
+    let escaped = false;
+    stack[top++] = seed;
+    inside[seed] = 1;
+    while (top > 0) {
+      const index = stack[--top];
+      const x = index % width;
+      const y = (index - x) / width;
+      if (x === 0 || y === 0 || x === width - 1 || y === height - 1) { escaped = true; break; }
+      let next = index - 1;
+      if (!inside[next] && pixels[next * 4 + 3] < FILL_ALPHA_GATE) { inside[next] = 1; stack[top++] = next; }
+      next = index + 1;
+      if (!inside[next] && pixels[next * 4 + 3] < FILL_ALPHA_GATE) { inside[next] = 1; stack[top++] = next; }
+      next = index - width;
+      if (!inside[next] && pixels[next * 4 + 3] < FILL_ALPHA_GATE) { inside[next] = 1; stack[top++] = next; }
+      next = index + width;
+      if (!inside[next] && pixels[next * 4 + 3] < FILL_ALPHA_GATE) { inside[next] = 1; stack[top++] = next; }
+    }
+    if (escaped) {
+      toast('That outline is open — close the gap, then fill');
+      return;
+    }
+
+    // Grow by a pixel so the colour tucks under the anti-aliased edge of the ink.
+    const grown = Uint8Array.from(inside);
+    for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
+      const index = y * width + x;
+      if (inside[index]) continue;
+      if (inside[index - 1] || inside[index + 1] || inside[index - width] || inside[index + width]) grown[index] = 1;
+    }
+
+    const vertexKey = (x, y) => x * (height + 1) + y;
+    const starts = new Map();
+    let edgeCount = 0;
+    const addEdge = (ax, ay, bx, by) => {
+      const k = vertexKey(ax, ay);
+      const list = starts.get(k);
+      if (list) list.push([bx, by]); else starts.set(k, [[bx, by]]);
+      edgeCount++;
+    };
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      if (!grown[y * width + x]) continue;
+      if (y === 0 || !grown[(y - 1) * width + x]) addEdge(x, y, x + 1, y);
+      if (x === width - 1 || !grown[y * width + x + 1]) addEdge(x + 1, y, x + 1, y + 1);
+      if (y === height - 1 || !grown[(y + 1) * width + x]) addEdge(x + 1, y + 1, x, y + 1);
+      if (x === 0 || !grown[y * width + x - 1]) addEdge(x, y + 1, x, y);
+    }
+    if (!edgeCount || edgeCount > FILL_MAX_EDGES) {
+      toast('That area is too intricate to fill');
+      return;
+    }
+
+    const loops = [];
+    for (const startKey of [...starts.keys()]) {
+      while (starts.get(startKey)?.length) {
+        const sx = Math.floor(startKey / (height + 1));
+        const sy = startKey % (height + 1);
+        const loop = [[sx, sy]];
+        let cx = sx;
+        let cy = sy;
+        let guard = edgeCount + 4;
+        while (guard-- > 0) {
+          const here = starts.get(vertexKey(cx, cy));
+          if (!here || !here.length) break;
+          const [nx, ny] = here.shift();
+          cx = nx;
+          cy = ny;
+          if (cx === sx && cy === sy) break;
+          loop.push([cx, cy]);
+        }
+        if (loop.length >= 4) loops.push(loop);
+      }
+    }
+
+    const minLoopArea = Math.pow(2.5 * scale, 2);
+    let tolerance = 1.1;
+    let simplified = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      simplified = loops
+        .filter((loop) => loopArea(loop) >= minLoopArea)
+        .map((loop) => simplifyLoop(loop, tolerance))
+        .filter((loop) => loop.length >= 3);
+      const total = simplified.reduce((sum, loop) => sum + loop.length, 0);
+      if (total <= FILL_MAX_POINTS) break;
+      tolerance *= 2.2;
+    }
+    if (!simplified.length) return;
+
+    const contours = simplified.map((loop) => loop.map(([x, y]) => ({
+      x: Math.round((originX + x / scale) * 10) / 10,
+      y: Math.round((originY + y / scale) * 10) / 10,
+    })));
+
+    strokes.push({ tool: 'fill', colour, contours });
+    redoStack = [];
+    redraw();
+    updateHistoryButtons();
+    scheduleSave();
+  }
+
   function updatePaperGrid() {
     const fineGrid = camera.zoom >= .28;
     const spacing = (fineGrid ? 22 : 110) * camera.zoom;
@@ -555,7 +855,8 @@ export function initNotes({ supabase, toast }) {
     let maxY = -Infinity;
     for (const stroke of items) {
       if (stroke.tool === 'eraser') continue;
-      for (const point of stroke.points || []) {
+      const groups = stroke.tool === 'fill' ? (stroke.contours || []) : [stroke.points || []];
+      for (const group of groups) for (const point of group) {
         minX = Math.min(minX, point.x);
         minY = Math.min(minY, point.y);
         maxX = Math.max(maxX, point.x);
@@ -595,7 +896,7 @@ export function initNotes({ supabase, toast }) {
     const offsetY = (targetCanvas.height - height * scale) / 2 - bounds.minY * scale;
     const target = targetCanvas.getContext('2d');
     const map = (point) => ({ x: point.x * scale + offsetX, y: point.y * scale + offsetY });
-    thumbnailStrokes.forEach((stroke) => paintStroke(target, stroke, map, scale, migrated.theme));
+    paintStrokes(target, thumbnailStrokes, map, scale, migrated.theme);
     target.globalCompositeOperation = 'source-over';
   }
 
@@ -640,7 +941,17 @@ export function initNotes({ supabase, toast }) {
 
   function selectColour(next) {
     colour = next;
-    $$('.ink-color').forEach((button) => button.classList.toggle('is-active', button.dataset.color.toLowerCase() === colour.toLowerCase()));
+    let matched = false;
+    $$('.ink-color').forEach((button) => {
+      const selected = button.dataset.color.toLowerCase() === colour.toLowerCase();
+      if (selected) matched = true;
+      button.classList.toggle('is-active', selected);
+    });
+    const wheel = $('#ink-wheel');
+    if (wheel) {
+      if (/^#[0-9a-f]{6}$/i.test(colour)) wheel.value = colour;
+      wheel.closest('.ink-wheel')?.classList.toggle('is-active', !matched);
+    }
   }
 
   function setPaper(style, save = true) {
@@ -702,7 +1013,7 @@ export function initNotes({ supabase, toast }) {
       }
     }
     const map = (point) => ({ x: (point.x - minX) * scale, y: (point.y - minY) * scale });
-    strokes.forEach((stroke) => paintStroke(outputCtx, stroke, map, scale));
+    paintStrokes(outputCtx, strokes, map, scale);
     outputCtx.globalCompositeOperation = 'destination-over';
     outputCtx.fillStyle = paperColour;
     outputCtx.fillRect(0, 0, output.width, output.height);
@@ -883,6 +1194,14 @@ export function initNotes({ supabase, toast }) {
     toast('Note deleted');
   }
 
+  // A resting palm used to start a text selection that ran away across the page.
+  editor.addEventListener('selectstart', (event) => {
+    if (!event.target.closest?.('input, textarea')) event.preventDefault();
+  });
+  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach((name) => {
+    editor.addEventListener(name, (event) => event.preventDefault());
+  });
   canvas.addEventListener('pointerdown', beginPointer);
   canvas.addEventListener('pointermove', movePointer);
   canvas.addEventListener('pointerup', endPointer);
@@ -904,6 +1223,7 @@ export function initNotes({ supabase, toast }) {
 
   $$('.ink-tool').forEach((button) => button.addEventListener('click', () => setTool(button.dataset.tool)));
   $$('.ink-color').forEach((button) => button.addEventListener('click', () => selectColour(button.dataset.color)));
+  $('#ink-wheel').addEventListener('input', (event) => selectColour(event.target.value));
   $$('.paper-style').forEach((button) => button.addEventListener('click', () => setPaper(button.dataset.paper)));
   $$('.paper-theme').forEach((button) => button.addEventListener('click', () => setPaperTheme(button.dataset.theme)));
   $('#ink-size').addEventListener('input', (event) => { size = Number(event.target.value); });
