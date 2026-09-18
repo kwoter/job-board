@@ -1,11 +1,11 @@
 {
-  "name": "Jobs Board",
-  "short_name": "Jobs",
-  "description": "Personal job board",
+  "name": "Field — Jobs & Notes",
+  "short_name": "Field",
+  "description": "Synced jobs and Apple Pencil notes",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#070B17",
   "theme_color": "#070B17",
   "icons": [

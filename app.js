@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.4';
+import { initNotes } from './notes.js';
 
 const SUPABASE_URL = 'https://kmxhcvmxeoqglpshzuns.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtteGhjdm14ZW9xZ2xwc2h6dW5zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzODg0MTIsImV4cCI6MjA5NTk2NDQxMn0.-Nm_KAabbu9FQTql81blTmULPivBUnzwXa_eDN5dFao';
@@ -30,6 +31,7 @@ let unlocked = false;
 let lockBusy = false;
 let pinBuffer = '';
 let wrongAttempts = 0;
+let notesReady = false;
 
 /* ---------- Service worker ---------- */
 if ('serviceWorker' in navigator) {
@@ -177,6 +179,10 @@ function startApp() {
   loadJobs();
   subscribeRealtime();
   initBell();
+  if (!notesReady) {
+    initNotes({ supabase, toast });
+    notesReady = true;
+  }
   $('#app-view').hidden = false;
   lockEl.classList.add('is-open');
   setTimeout(() => { lockEl.hidden = true; }, 460);

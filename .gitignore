@@ -1,2 +1,7 @@
 .secrets.json
 .DS_Store
+apple/build/
+apple/DerivedData/
+apple/*.xcworkspace/xcuserdata/
+apple/*.xcodeproj/xcuserdata/
+supabase/.temp/

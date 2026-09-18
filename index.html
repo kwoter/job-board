@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Jobs Board</title>
-  <meta name="description" content="Personal job board">
+  <title>Jobs & Notes</title>
+  <meta name="description" content="Your synced jobs and handwritten notes">
   <meta name="theme-color" content="#070B17">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
@@ -12,7 +12,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Jobs">
+  <meta name="apple-mobile-web-app-title" content="Jobs + Notes">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
@@ -78,8 +78,18 @@
   <div id="app-view" class="view app-view" hidden>
     <header class="app-header">
       <div class="header-title">
-        <h1 class="wordmark">Jobs<span class="wordmark-dot">.</span></h1>
+        <h1 class="wordmark">Field<span class="wordmark-dot">.</span></h1>
       </div>
+      <nav class="app-switcher" aria-label="Main sections">
+        <button class="app-switch is-active" data-screen="jobs" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h5M8 16h7"/></svg>
+          Jobs
+        </button>
+        <button class="app-switch" data-screen="notes">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6a2 2 0 0 1 2-2h9l5 5v10.5a.5.5 0 0 1-.5.5H4.5a.5.5 0 0 1-.5-.5Z"/><path d="M14 4v6h6M8 14h8M8 17h5"/></svg>
+          Notes
+        </button>
+      </nav>
       <div class="header-actions">
         <button id="add-desktop" class="btn-primary btn-add-desktop">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -92,6 +102,7 @@
       </div>
     </header>
 
+    <main id="jobs-screen" class="app-screen">
     <section class="hero">
       <div class="hero-text">
         <h2 class="hero-greeting" id="hero-greeting"></h2>
@@ -165,6 +176,118 @@
     <button id="fab" class="fab" aria-label="Add job">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     </button>
+    </main>
+
+    <main id="notes-screen" class="app-screen notes-screen" hidden>
+      <section class="notes-hero">
+        <div>
+          <span class="eyebrow"><span class="live-dot"></span> Cloud notebook</span>
+          <h2>Notes Studio<span class="wordmark-dot">.</span></h2>
+          <p>Write naturally with Apple Pencil. Your pages stay synced here and on your laptop.</p>
+        </div>
+        <button id="new-note" class="btn-primary note-new-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New page
+        </button>
+      </section>
+
+      <section class="notebook-shelf" aria-labelledby="notebook-title">
+        <div class="shelf-heading">
+          <h3 id="notebook-title">Your notebook</h3>
+          <span id="notes-sync-label">Opening notebook…</span>
+        </div>
+        <div id="notes-grid" class="notes-grid" aria-live="polite"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="note-editor" class="note-editor" hidden>
+    <header class="note-editor-head">
+      <button id="note-back" class="editor-icon-btn" aria-label="Back to notebook">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+      </button>
+      <input id="note-title" class="note-title-input" value="Untitled note" aria-label="Note title">
+      <div class="save-state" id="note-save-state"><span></span> Saved</div>
+      <div class="editor-head-actions">
+        <button id="note-undo" class="editor-icon-btn" aria-label="Undo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 4 12l5 5"/><path d="M20 17a7 7 0 0 0-7-7H4"/></svg></button>
+        <button id="note-redo" class="editor-icon-btn" aria-label="Redo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m15 7 5 5-5 5"/><path d="M4 17a7 7 0 0 1 7-7h9"/></svg></button>
+        <button id="note-clean" class="clean-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.2 3.2L16.5 7.5l-3.3 1.2L12 12l-1.2-3.3-3.3-1.2 3.3-1.3L12 3Z"/><path d="m18.5 13 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/></svg>
+          Clean up
+        </button>
+        <button id="note-more" class="editor-icon-btn" aria-label="More note options"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+      </div>
+    </header>
+
+    <div class="note-workspace">
+      <aside class="instrument-rail" aria-label="Drawing tools">
+        <div class="tool-group" role="radiogroup" aria-label="Ink tool">
+          <button class="ink-tool is-active" data-tool="fountain" title="Fountain pen" aria-label="Fountain pen" aria-checked="true">
+            <svg viewBox="0 0 26 26" fill="none"><path d="M8 19 5 21l2-4L16.8 7.2l2 2L8 19Z" stroke="currentColor" stroke-width="1.8"/><path d="m15.7 8.3 2 2M17.8 6.2l2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Ink</span>
+          </button>
+          <button class="ink-tool" data-tool="pencil" title="Graphite pencil" aria-label="Graphite pencil" aria-checked="false">
+            <svg viewBox="0 0 26 26" fill="none"><path d="m6 18 1.2-4L17 4.2a1.4 1.4 0 0 1 2 0l2.8 2.8a1.4 1.4 0 0 1 0 2L12 18.8 8 20l-2-2Z" stroke="currentColor" stroke-width="1.7"/><path d="m16 5.2 4.8 4.8M7.2 14 12 18.8" stroke="currentColor" stroke-width="1.7"/></svg><span>Pencil</span>
+          </button>
+          <button class="ink-tool" data-tool="marker" title="Marker" aria-label="Marker" aria-checked="false">
+            <svg viewBox="0 0 26 26" fill="none"><path d="m8 17 9-12 4 3-9 12H8v-3Z" stroke="currentColor" stroke-width="1.8"/><path d="M8 20h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Marker</span>
+          </button>
+          <button class="ink-tool" data-tool="highlighter" title="Highlighter" aria-label="Highlighter" aria-checked="false">
+            <svg viewBox="0 0 26 26" fill="none"><path d="m7 16 8-11 5 4-8 11H7v-4Z" stroke="currentColor" stroke-width="1.8"/><path d="M5 22h16" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg><span>Glow</span>
+          </button>
+          <button class="ink-tool" data-tool="eraser" title="Eraser" aria-label="Eraser" aria-checked="false">
+            <svg viewBox="0 0 26 26" fill="none"><path d="m5.5 16.5 9-10a2 2 0 0 1 2.8-.2l3.3 3a2 2 0 0 1 .2 2.8L13.7 20H8l-2.5-2.2a1 1 0 0 1 0-1.3Z" stroke="currentColor" stroke-width="1.7"/><path d="m11 10.5 6.4 5.8M8 20h12" stroke="currentColor" stroke-width="1.7"/></svg><span>Erase</span>
+          </button>
+        </div>
+        <div class="rail-divider"></div>
+        <div id="ink-colors" class="ink-colors" aria-label="Ink colour">
+          <button class="ink-color is-active" data-color="#162034" style="--swatch:#162034" aria-label="Midnight ink"></button>
+          <button class="ink-color" data-color="#2563EB" style="--swatch:#2563EB" aria-label="Blue ink"></button>
+          <button class="ink-color" data-color="#E3485C" style="--swatch:#E3485C" aria-label="Red ink"></button>
+          <button class="ink-color" data-color="#138A68" style="--swatch:#138A68" aria-label="Green ink"></button>
+          <button class="ink-color" data-color="#F3C84B" style="--swatch:#F3C84B" aria-label="Yellow ink"></button>
+        </div>
+        <label class="size-control" title="Stroke size">
+          <span class="size-dot size-dot-small"></span>
+          <input id="ink-size" type="range" min="1" max="18" value="4" aria-label="Stroke size">
+          <span class="size-dot size-dot-large"></span>
+        </label>
+        <div class="page-style-picker" aria-label="Paper style">
+          <button class="paper-style is-active" data-paper="dot" aria-label="Dotted paper">••</button>
+          <button class="paper-style" data-paper="ruled" aria-label="Ruled paper">☰</button>
+          <button class="paper-style" data-paper="plain" aria-label="Plain paper">□</button>
+        </div>
+      </aside>
+
+      <main class="paper-stage">
+        <div id="paper" class="paper paper-dot">
+          <canvas id="ink-canvas" aria-label="Handwriting canvas"></canvas>
+          <div class="paper-corner" aria-hidden="true"></div>
+        </div>
+        <div class="pencil-hint" id="pencil-hint"><span> Pencil ready</span><small>Pressure changes the line</small></div>
+      </main>
+    </div>
+  </div>
+
+  <div id="clean-panel" class="clean-panel" hidden>
+    <div class="clean-panel-card" role="dialog" aria-modal="true" aria-labelledby="clean-title">
+      <header>
+        <div><span class="eyebrow">Smart copy</span><h2 id="clean-title">Neaten your writing</h2></div>
+        <button id="clean-close" class="editor-icon-btn" aria-label="Close clean copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </header>
+      <div class="scribble-tip"><span class="scribble-glyph">Aa</span><div><strong>Best on iPad</strong><p>Write directly in the box with Apple Pencil. Scribble converts it to neat text as you write.</p></div></div>
+      <textarea id="clean-text" rows="11" placeholder="Write here with Apple Pencil, paste text, or let the app read your ink…"></textarea>
+      <div class="clean-actions">
+        <button id="read-page" class="btn-secondary"><span class="read-label">Read this page</span><span class="spinner"></span></button>
+        <button id="copy-clean" class="btn-secondary">Copy text</button>
+        <button id="save-clean" class="btn-primary">Save clean copy</button>
+      </div>
+      <p id="ocr-status" class="ocr-status" aria-live="polite"></p>
+    </div>
+  </div>
+
+  <div id="note-menu" class="note-menu" hidden>
+    <button id="export-note">Export page as image</button>
+    <button id="delete-note" class="danger">Delete note</button>
   </div>
 
   <!-- Add / edit sheet -->

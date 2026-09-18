@@ -1,9 +1,10 @@
-const CACHE = 'jobs-v4';
+const CACHE = 'field-v5';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
   './app.js',
+  './notes.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
