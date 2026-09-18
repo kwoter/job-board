@@ -1,5 +1,7 @@
-const DRAWING_VERSION = 1;
-const DEFAULT_DRAWING = () => ({ version: DRAWING_VERSION, strokes: [] });
+const DRAWING_VERSION = 2;
+const DEFAULT_DRAWING = () => ({ version: DRAWING_VERSION, strokes: [], view: { x: 0, y: 0, zoom: 1 } });
+const MIN_ZOOM = .05;
+const MAX_ZOOM = 8;
 
 export function initNotes({ supabase, toast }) {
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -27,6 +29,11 @@ export function initNotes({ supabase, toast }) {
   let resizeFrame = null;
   let channel = null;
   let loaded = false;
+  let camera = { x: 0, y: 0, zoom: 1 };
+  let drawingPointerId = null;
+  const touchPointers = new Map();
+  let panGesture = null;
+  let pinchGesture = null;
 
   const toolPreset = {
     fountain: { width: 1, opacity: 1, composite: 'source-over' },
@@ -95,6 +102,20 @@ export function initNotes({ supabase, toast }) {
     return DEFAULT_DRAWING();
   }
 
+  function migrateDrawing(drawing) {
+    const copy = structuredClone(drawing || DEFAULT_DRAWING());
+    if ((copy.version || 1) < 2) {
+      copy.strokes = (copy.strokes || []).map((stroke) => ({
+        ...stroke,
+        points: (stroke.points || []).map((point) => ({ ...point, x: point.x * 1200, y: point.y * 1600 })),
+      }));
+      copy.view = { x: 0, y: 0, zoom: .55 };
+      copy.version = 2;
+    }
+    copy.view ||= { x: 0, y: 0, zoom: 1 };
+    return copy;
+  }
+
   function relativeDate(value) {
     const date = new Date(value || Date.now());
     const diff = Date.now() - date.getTime();
@@ -140,7 +161,7 @@ export function initNotes({ supabase, toast }) {
       card.append(preview, meta);
       card.addEventListener('click', () => openNote(note));
       grid.append(card);
-      requestAnimationFrame(() => drawThumbnail(mini, drawingFor(note).strokes));
+      requestAnimationFrame(() => drawThumbnail(mini, drawingFor(note)));
     });
   }
 
@@ -169,7 +190,13 @@ export function initNotes({ supabase, toast }) {
 
   function openNote(note) {
     active = structuredClone(note);
-    strokes = structuredClone(drawingFor(note).strokes);
+    const drawing = migrateDrawing(drawingFor(note));
+    strokes = drawing.strokes;
+    camera = {
+      x: Number(drawing.view?.x) || 0,
+      y: Number(drawing.view?.y) || 0,
+      zoom: clamp(Number(drawing.view?.zoom) || 1, MIN_ZOOM, MAX_ZOOM),
+    };
     redoStack = [];
     $('#note-title').value = active.title || 'Untitled note';
     $('#clean-text').value = active.clean_text || '';
@@ -208,7 +235,7 @@ export function initNotes({ supabase, toast }) {
   async function saveActive() {
     if (!active) return;
     active.title = $('#note-title').value.trim() || 'Untitled note';
-    active.drawing = { version: DRAWING_VERSION, strokes };
+    active.drawing = { version: DRAWING_VERSION, strokes, view: camera };
     active.clean_text = $('#clean-text').value;
     active.updated_at = new Date().toISOString();
     saveLocal(active);
@@ -244,6 +271,10 @@ export function initNotes({ supabase, toast }) {
     } catch { /* cloud save will still be attempted */ }
   }
 
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
   function resizeCanvas() {
     cancelAnimationFrame(resizeFrame);
     resizeFrame = requestAnimationFrame(() => {
@@ -260,68 +291,158 @@ export function initNotes({ supabase, toast }) {
     });
   }
 
-  function pointFromEvent(event) {
+  function screenPoint(event) {
     const rect = canvas.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
+
+  function worldPoint(event) {
+    const point = screenPoint(event);
     return {
-      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+      x: camera.x + point.x / camera.zoom,
+      y: camera.y + point.y / camera.zoom,
       p: event.pressure > 0 ? event.pressure : .5,
     };
   }
 
-  function beginStroke(event) {
+  function beginPointer(event) {
     if (event.button !== undefined && event.button !== 0) return;
     event.preventDefault();
     canvas.setPointerCapture?.(event.pointerId);
+    if (event.pointerType === 'touch') {
+      const point = screenPoint(event);
+      touchPointers.set(event.pointerId, point);
+      if (touchPointers.size === 1) {
+        panGesture = { start: point, camera: { ...camera } };
+        pinchGesture = null;
+      } else if (touchPointers.size >= 2) {
+        startPinch();
+      }
+      return;
+    }
+    drawingPointerId = event.pointerId;
     currentStroke = {
       tool,
       colour: tool === 'eraser' ? '#000000' : colour,
       size,
-      points: [pointFromEvent(event)],
+      points: [worldPoint(event)],
     };
     redoStack = [];
     $('#pencil-hint').hidden = true;
   }
 
-  function moveStroke(event) {
-    if (!currentStroke) return;
+  function movePointer(event) {
+    if (event.pointerType === 'touch') {
+      if (!touchPointers.has(event.pointerId)) return;
+      event.preventDefault();
+      touchPointers.set(event.pointerId, screenPoint(event));
+      if (touchPointers.size >= 2 && pinchGesture) {
+        const [a, b] = [...touchPointers.values()];
+        const centre = midpoint(a, b);
+        const distance = pointDistance(a, b);
+        const zoom = clamp(pinchGesture.zoom * distance / Math.max(1, pinchGesture.distance), MIN_ZOOM, MAX_ZOOM);
+        camera.zoom = zoom;
+        camera.x = pinchGesture.anchor.x - centre.x / zoom;
+        camera.y = pinchGesture.anchor.y - centre.y / zoom;
+        redraw();
+      } else if (touchPointers.size === 1 && panGesture) {
+        const point = [...touchPointers.values()][0];
+        camera.x = panGesture.camera.x - (point.x - panGesture.start.x) / camera.zoom;
+        camera.y = panGesture.camera.y - (point.y - panGesture.start.y) / camera.zoom;
+        redraw();
+      }
+      return;
+    }
+    if (!currentStroke || event.pointerId !== drawingPointerId) return;
     event.preventDefault();
     const events = event.getCoalescedEvents?.() || [event];
     for (const item of events) {
-      const point = pointFromEvent(item);
+      const point = worldPoint(item);
       const previous = currentStroke.points[currentStroke.points.length - 1];
       const dx = point.x - previous.x;
       const dy = point.y - previous.y;
-      if ((dx * dx) + (dy * dy) > .000001) currentStroke.points.push(point);
+      if ((dx * dx) + (dy * dy) > .18) currentStroke.points.push(point);
     }
     redraw(currentStroke);
   }
 
-  function endStroke(event) {
-    if (!currentStroke) return;
+  function endPointer(event) {
+    if (event.pointerType === 'touch') {
+      if (!touchPointers.has(event.pointerId)) return;
+      event.preventDefault();
+      touchPointers.delete(event.pointerId);
+      if (touchPointers.size === 1) {
+        const point = [...touchPointers.values()][0];
+        panGesture = { start: point, camera: { ...camera } };
+        pinchGesture = null;
+      } else if (touchPointers.size === 0) {
+        panGesture = null;
+        pinchGesture = null;
+        scheduleSave();
+      }
+      return;
+    }
+    if (!currentStroke || event.pointerId !== drawingPointerId) return;
     event.preventDefault();
     if (currentStroke.points.length === 1) {
       const point = currentStroke.points[0];
-      currentStroke.points.push({ ...point, x: Math.min(1, point.x + .0005) });
+      currentStroke.points.push({ ...point, x: point.x + .5 / camera.zoom });
     }
     strokes.push(currentStroke);
     currentStroke = null;
+    drawingPointerId = null;
     redraw();
     updateHistoryButtons();
     scheduleSave();
   }
 
-  function redraw(liveStroke = null) {
-    const width = canvas.width;
-    const height = canvas.height;
-    ctx.clearRect(0, 0, width, height);
-    strokes.forEach((stroke) => drawStroke(ctx, stroke, width, height));
-    if (liveStroke) drawStroke(ctx, liveStroke, width, height);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
+  function midpoint(a, b) {
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   }
 
-  function drawStroke(target, stroke, width, height) {
+  function pointDistance(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  function startPinch() {
+    const [a, b] = [...touchPointers.values()];
+    const centre = midpoint(a, b);
+    pinchGesture = {
+      distance: pointDistance(a, b),
+      zoom: camera.zoom,
+      anchor: { x: camera.x + centre.x / camera.zoom, y: camera.y + centre.y / camera.zoom },
+    };
+    panGesture = null;
+  }
+
+  function setZoom(nextZoom, anchor = null, save = true) {
+    const rect = canvas.getBoundingClientRect();
+    const point = anchor || { x: rect.width / 2, y: rect.height / 2 };
+    const world = { x: camera.x + point.x / camera.zoom, y: camera.y + point.y / camera.zoom };
+    camera.zoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
+    camera.x = world.x - point.x / camera.zoom;
+    camera.y = world.y - point.y / camera.zoom;
+    redraw();
+    if (save) scheduleSave();
+  }
+
+  function redraw(liveStroke = null) {
+    const dpr = canvas.width / Math.max(1, canvas.getBoundingClientRect().width);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const map = (point) => ({
+      x: (point.x - camera.x) * camera.zoom * dpr,
+      y: (point.y - camera.y) * camera.zoom * dpr,
+    });
+    const strokeScale = camera.zoom * dpr;
+    strokes.forEach((stroke) => paintStroke(ctx, stroke, map, strokeScale));
+    if (liveStroke) paintStroke(ctx, liveStroke, map, strokeScale);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    updatePaperGrid();
+    $('#zoom-level').textContent = `${Math.round(camera.zoom * 100)}%`;
+  }
+
+  function paintStroke(target, stroke, map, strokeScale = 1) {
     const preset = toolPreset[stroke.tool] || toolPreset.fountain;
     const points = stroke.points || [];
     if (points.length < 2) return;
@@ -331,37 +452,100 @@ export function initNotes({ supabase, toast }) {
     target.strokeStyle = stroke.colour || '#162034';
     target.lineCap = 'round';
     target.lineJoin = 'round';
-    const base = Math.max(1, Number(stroke.size || 4) * preset.width * width / 820);
+    const base = Math.max(.55, Number(stroke.size || 4) * preset.width * strokeScale);
     for (let i = 1; i < points.length; i++) {
       const a = points[i - 1];
       const b = points[i];
+      const from = map(a);
+      const to = map(b);
       const pressure = stroke.tool === 'highlighter' || stroke.tool === 'marker'
         ? 1
         : Math.max(.45, ((a.p || .5) + (b.p || .5)) / 2);
-      target.lineWidth = Math.max(.75, base * (.6 + pressure * .8));
+      target.lineWidth = Math.max(.55, base * (.6 + pressure * .8));
       target.beginPath();
-      target.moveTo(a.x * width, a.y * height);
-      target.lineTo(b.x * width, b.y * height);
+      target.moveTo(from.x, from.y);
+      target.lineTo(to.x, to.y);
       target.stroke();
     }
     if (stroke.tool === 'pencil') {
       target.globalAlpha = .17;
-      target.lineWidth = Math.max(.5, base * .42);
+      target.lineWidth = Math.max(.45, base * .42);
+      const first = map(points[0]);
       target.beginPath();
-      target.moveTo(points[0].x * width + 1, points[0].y * height);
-      points.slice(1).forEach((point) => target.lineTo(point.x * width + 1, point.y * height));
+      target.moveTo(first.x + strokeScale, first.y);
+      points.slice(1).forEach((point) => {
+        const mapped = map(point);
+        target.lineTo(mapped.x + strokeScale, mapped.y);
+      });
       target.stroke();
     }
     target.restore();
   }
 
-  function drawThumbnail(targetCanvas, thumbnailStrokes) {
+  function updatePaperGrid() {
+    const fineGrid = camera.zoom >= .28;
+    const spacing = (fineGrid ? 22 : 110) * camera.zoom;
+    if (active?.page_style === 'dot') {
+      paper.style.backgroundSize = `${spacing}px ${spacing}px`;
+      paper.style.backgroundPosition = `${-camera.x * camera.zoom}px ${-camera.y * camera.zoom}px`;
+    } else if (active?.page_style === 'ruled') {
+      const ruledSpacing = 32 * camera.zoom;
+      paper.style.backgroundSize = `100% ${ruledSpacing}px`;
+      paper.style.backgroundPosition = `0 ${-camera.y * camera.zoom}px`;
+    } else {
+      paper.style.backgroundSize = '';
+      paper.style.backgroundPosition = '';
+    }
+  }
+
+  function contentBounds(items = strokes) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const stroke of items) {
+      if (stroke.tool === 'eraser') continue;
+      for (const point of stroke.points || []) {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      }
+    }
+    if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 1200, maxY: 1600 };
+    return { minX, minY, maxX, maxY };
+  }
+
+  function fitDrawing() {
+    const rect = canvas.getBoundingClientRect();
+    const bounds = contentBounds();
+    const width = Math.max(240, bounds.maxX - bounds.minX);
+    const height = Math.max(320, bounds.maxY - bounds.minY);
+    camera.zoom = clamp(Math.min((rect.width - 80) / width, (rect.height - 80) / height), MIN_ZOOM, 1.5);
+    camera.x = (bounds.minX + bounds.maxX) / 2 - rect.width / (2 * camera.zoom);
+    camera.y = (bounds.minY + bounds.maxY) / 2 - rect.height / (2 * camera.zoom);
+    redraw();
+    scheduleSave();
+  }
+
+  function drawThumbnail(targetCanvas, drawing) {
+    const migrated = migrateDrawing(drawing);
+    const thumbnailStrokes = migrated.strokes;
     const rect = targetCanvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     targetCanvas.width = Math.max(1, Math.round(rect.width * dpr));
     targetCanvas.height = Math.max(1, Math.round(rect.height * dpr));
+    if (!thumbnailStrokes.length) return;
+    const bounds = contentBounds(thumbnailStrokes);
+    const width = Math.max(100, bounds.maxX - bounds.minX);
+    const height = Math.max(100, bounds.maxY - bounds.minY);
+    const padding = 22 * dpr;
+    const scale = Math.min((targetCanvas.width - padding * 2) / width, (targetCanvas.height - padding * 2) / height);
+    const offsetX = (targetCanvas.width - width * scale) / 2 - bounds.minX * scale;
+    const offsetY = (targetCanvas.height - height * scale) / 2 - bounds.minY * scale;
     const target = targetCanvas.getContext('2d');
-    thumbnailStrokes.forEach((stroke) => drawStroke(target, stroke, targetCanvas.width, targetCanvas.height));
+    const map = (point) => ({ x: point.x * scale + offsetX, y: point.y * scale + offsetY });
+    thumbnailStrokes.forEach((stroke) => paintStroke(target, stroke, map, scale));
     target.globalCompositeOperation = 'source-over';
   }
 
@@ -406,29 +590,44 @@ export function initNotes({ supabase, toast }) {
     active.page_style = style;
     paper.className = `paper paper-${style}`;
     $$('.paper-style').forEach((button) => button.classList.toggle('is-active', button.dataset.paper === style));
+    updatePaperGrid();
     if (save) scheduleSave();
   }
 
-  function renderPage(scale = 2) {
+  function renderPage(density = 1) {
+    const bounds = contentBounds();
+    const padding = 120;
+    const minX = bounds.minX - padding;
+    const minY = bounds.minY - padding;
+    const worldWidth = Math.max(500, bounds.maxX - bounds.minX + padding * 2);
+    const worldHeight = Math.max(650, bounds.maxY - bounds.minY + padding * 2);
+    const scale = Math.min(2 * density, (2600 * density) / Math.max(worldWidth, worldHeight));
     const output = document.createElement('canvas');
-    output.width = 1200 * scale;
-    output.height = 1600 * scale;
+    output.width = Math.max(1, Math.round(worldWidth * scale));
+    output.height = Math.max(1, Math.round(worldHeight * scale));
     const outputCtx = output.getContext('2d');
     outputCtx.fillStyle = '#F8F6EF';
     outputCtx.fillRect(0, 0, output.width, output.height);
     if (active?.page_style === 'ruled') {
       outputCtx.strokeStyle = 'rgba(59, 92, 126, .16)';
-      outputCtx.lineWidth = 2;
-      for (let y = 105; y < output.height; y += 96) {
+      outputCtx.lineWidth = Math.max(1, scale);
+      const firstLine = Math.floor(minY / 32) * 32;
+      for (let worldY = firstLine; worldY < minY + worldHeight; worldY += 32) {
+        const y = (worldY - minY) * scale;
         outputCtx.beginPath(); outputCtx.moveTo(0, y); outputCtx.lineTo(output.width, y); outputCtx.stroke();
       }
     } else if (active?.page_style === 'dot') {
       outputCtx.fillStyle = 'rgba(47, 71, 95, .22)';
-      for (let x = 45; x < output.width; x += 66) for (let y = 45; y < output.height; y += 66) {
-        outputCtx.beginPath(); outputCtx.arc(x, y, 2.2, 0, Math.PI * 2); outputCtx.fill();
+      const firstX = Math.floor(minX / 22) * 22;
+      const firstY = Math.floor(minY / 22) * 22;
+      for (let worldX = firstX; worldX < minX + worldWidth; worldX += 22) for (let worldY = firstY; worldY < minY + worldHeight; worldY += 22) {
+        const x = (worldX - minX) * scale;
+        const y = (worldY - minY) * scale;
+        outputCtx.beginPath(); outputCtx.arc(x, y, Math.max(1, scale), 0, Math.PI * 2); outputCtx.fill();
       }
     }
-    strokes.forEach((stroke) => drawStroke(outputCtx, stroke, output.width, output.height));
+    const map = (point) => ({ x: (point.x - minX) * scale, y: (point.y - minY) * scale });
+    strokes.forEach((stroke) => paintStroke(outputCtx, stroke, map, scale));
     outputCtx.globalCompositeOperation = 'destination-over';
     outputCtx.fillStyle = '#F8F6EF';
     outputCtx.fillRect(0, 0, output.width, output.height);
@@ -518,10 +717,22 @@ export function initNotes({ supabase, toast }) {
     toast('Note deleted');
   }
 
-  canvas.addEventListener('pointerdown', beginStroke);
-  canvas.addEventListener('pointermove', moveStroke);
-  canvas.addEventListener('pointerup', endStroke);
-  canvas.addEventListener('pointercancel', endStroke);
+  canvas.addEventListener('pointerdown', beginPointer);
+  canvas.addEventListener('pointermove', movePointer);
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const point = screenPoint(event);
+    if (event.ctrlKey || event.metaKey) {
+      setZoom(camera.zoom * Math.exp(-event.deltaY * .008), point);
+    } else {
+      camera.x += event.deltaX / camera.zoom;
+      camera.y += event.deltaY / camera.zoom;
+      redraw();
+      scheduleSave();
+    }
+  }, { passive: false });
   window.addEventListener('resize', resizeCanvas);
   new ResizeObserver(resizeCanvas).observe(paper);
 
@@ -533,6 +744,9 @@ export function initNotes({ supabase, toast }) {
   $('#note-back').addEventListener('click', closeNote);
   $('#note-undo').addEventListener('click', undo);
   $('#note-redo').addEventListener('click', redo);
+  $('#zoom-out').addEventListener('click', () => setZoom(camera.zoom / 1.35));
+  $('#zoom-in').addEventListener('click', () => setZoom(camera.zoom * 1.35));
+  $('#zoom-level').addEventListener('click', fitDrawing);
   $('#new-note').addEventListener('click', createNote);
   $('#note-clean').addEventListener('click', openCleanPanel);
   $('#clean-close').addEventListener('click', () => { $('#clean-panel').hidden = true; });

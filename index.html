@@ -261,9 +261,13 @@
       <main class="paper-stage">
         <div id="paper" class="paper paper-dot">
           <canvas id="ink-canvas" aria-label="Handwriting canvas"></canvas>
-          <div class="paper-corner" aria-hidden="true"></div>
         </div>
-        <div class="pencil-hint" id="pencil-hint"><span> Pencil ready</span><small>Pressure changes the line</small></div>
+        <div class="canvas-zoom" aria-label="Canvas zoom controls">
+          <button id="zoom-out" aria-label="Zoom out">−</button>
+          <button id="zoom-level" aria-label="Reset and fit drawing">100%</button>
+          <button id="zoom-in" aria-label="Zoom in">＋</button>
+        </div>
+        <div class="pencil-hint" id="pencil-hint"><span> Pencil writes</span><small>One finger moves · pinch zooms</small></div>
       </main>
     </div>
   </div>
