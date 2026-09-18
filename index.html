@@ -215,6 +215,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.2 3.2L16.5 7.5l-3.3 1.2L12 12l-1.2-3.3-3.3-1.2 3.3-1.3L12 3Z"/><path d="m18.5 13 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/></svg>
           Clean up
         </button>
+        <button id="note-add-job" class="note-job-btn" aria-label="Add note to jobs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="3"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M12 10v4"/></svg>
+          <span>Add to jobs</span>
+        </button>
         <button id="note-more" class="editor-icon-btn" aria-label="More note options"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
       </div>
     </header>
@@ -241,6 +245,7 @@
         <div class="rail-divider"></div>
         <div id="ink-colors" class="ink-colors" aria-label="Ink colour">
           <button class="ink-color is-active" data-color="#162034" style="--swatch:#162034" aria-label="Midnight ink"></button>
+          <button class="ink-color" data-color="#F3F4F6" style="--swatch:#F3F4F6" aria-label="White ink"></button>
           <button class="ink-color" data-color="#2563EB" style="--swatch:#2563EB" aria-label="Blue ink"></button>
           <button class="ink-color" data-color="#E3485C" style="--swatch:#E3485C" aria-label="Red ink"></button>
           <button class="ink-color" data-color="#138A68" style="--swatch:#138A68" aria-label="Green ink"></button>
@@ -256,6 +261,10 @@
           <button class="paper-style" data-paper="ruled" aria-label="Ruled paper">☰</button>
           <button class="paper-style" data-paper="plain" aria-label="Plain paper">□</button>
         </div>
+        <div class="paper-theme-picker" aria-label="Paper colour">
+          <button class="paper-theme is-active" data-theme="light" aria-label="White paper" title="White paper">☀</button>
+          <button class="paper-theme" data-theme="dark" aria-label="Black paper" title="Black paper">☾</button>
+        </div>
       </aside>
 
       <main class="paper-stage">
@@ -267,7 +276,7 @@
           <button id="zoom-level" aria-label="Reset and fit drawing">100%</button>
           <button id="zoom-in" aria-label="Zoom in">＋</button>
         </div>
-        <div class="pencil-hint" id="pencil-hint"><span> Pencil writes</span><small>One finger moves · pinch zooms</small></div>
+        <div class="pencil-hint" id="pencil-hint"><span>Scratch to erase</span><small>2-finger tap undo · pinch zoom</small></div>
       </main>
     </div>
   </div>
@@ -290,8 +299,27 @@
   </div>
 
   <div id="note-menu" class="note-menu" hidden>
+    <button id="show-shortcuts">Pencil shortcuts</button>
     <button id="export-note">Export page as image</button>
     <button id="delete-note" class="danger">Delete note</button>
+  </div>
+
+  <div id="shortcut-panel" class="shortcut-panel" hidden>
+    <div class="shortcut-card" role="dialog" aria-modal="true" aria-labelledby="shortcut-title">
+      <header>
+        <div><span class="eyebrow">Gesture guide</span><h2 id="shortcut-title">Pencil shortcuts</h2></div>
+        <button id="shortcut-close" class="editor-icon-btn" aria-label="Close shortcuts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </header>
+      <div class="shortcut-grid">
+        <div><span class="shortcut-mark">〰</span><strong>Scratch out</strong><small>Rapidly scribble over ink to erase it.</small></div>
+        <div><span class="shortcut-mark">2×</span><strong>Pencil double-tap</strong><small>Tap the canvas twice to switch pen and eraser.</small></div>
+        <div><span class="shortcut-mark">2</span><strong>Two-finger tap</strong><small>Undo your last stroke.</small></div>
+        <div><span class="shortcut-mark">3</span><strong>Three-finger tap</strong><small>Redo the stroke.</small></div>
+        <div><span class="shortcut-mark">↔</span><strong>One-finger move</strong><small>Drag the endless paper around.</small></div>
+        <div><span class="shortcut-mark">↗</span><strong>Pinch</strong><small>Zoom from 5% to 800%.</small></div>
+      </div>
+      <p class="keyboard-tip"><strong>Laptop:</strong> E eraser · I ink · P pencil · M marker · H highlighter · Space drag to move · ⌘Z undo</p>
+    </div>
   </div>
 
   <!-- Add / edit sheet -->

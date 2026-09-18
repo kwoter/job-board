@@ -1165,6 +1165,10 @@ body.notes-active .fab { display: none; }
 .editor-head-actions { display: flex; gap: 6px; }
 .clean-btn { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid rgba(103, 232, 249, .26); border-radius: 12px; background: linear-gradient(145deg, rgba(34, 211, 238, .17), rgba(59, 130, 246, .12)); color: #8DEBF6; font-size: 0; }
 .clean-btn svg { width: 19px; height: 19px; }
+.note-job-btn { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid rgba(52, 211, 153, .28); border-radius: 12px; background: linear-gradient(145deg, rgba(52, 211, 153, .16), rgba(16, 185, 129, .08)); color: #82E8C0; font-size: 0; }
+.note-job-btn svg { width: 19px; height: 19px; }
+.note-job-btn.is-loading { opacity: .55; pointer-events: none; }
+.note-job-btn.is-added { border-color: rgba(52, 211, 153, .48); background: rgba(52, 211, 153, .18); color: #A7F3D0; }
 .note-workspace { min-height: 0; flex: 1; display: flex; flex-direction: column-reverse; overflow: hidden; }
 .instrument-rail {
   position: relative;
@@ -1194,6 +1198,9 @@ body.notes-active .fab { display: none; }
 .page-style-picker { display: flex; gap: 3px; padding: 3px; border: 1px solid rgba(148, 163, 184, .12); border-radius: 10px; }
 .paper-style { width: 31px; height: 31px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #71839E; font-size: 13px; }
 .paper-style.is-active { background: rgba(148, 163, 184, .13); color: #E5ECF7; }
+.paper-theme-picker { display: flex; gap: 3px; padding: 3px; border: 1px solid rgba(148, 163, 184, .12); border-radius: 10px; }
+.paper-theme { width: 31px; height: 31px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #71839E; font-size: 14px; }
+.paper-theme.is-active { background: rgba(148, 163, 184, .13); color: #E5ECF7; }
 .paper-stage { position: relative; min-height: 0; flex: 1; display: grid; overflow: hidden; background: radial-gradient(circle at 50% 10%, rgba(40, 77, 105, .22), transparent 55%), #101827; }
 .paper {
   position: relative;
@@ -1203,7 +1210,14 @@ body.notes-active .fab { display: none; }
   overflow: hidden;
   background-color: #F8F6EF;
   box-shadow: inset 0 0 90px rgba(97, 82, 51, .055);
+  transition: background-color 220ms ease, box-shadow 220ms ease;
 }
+.paper.paper-theme-dark, .note-preview.paper-theme-dark { background-color: #101722; }
+.paper-theme-dark.paper-dot { background-image: radial-gradient(circle, rgba(196, 214, 235, .22) 1px, transparent 1.2px); }
+.paper-theme-dark.paper-ruled { background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 31px, rgba(164, 190, 220, .15) 32px, transparent 33px); }
+.paper.paper-theme-dark { box-shadow: inset 0 0 110px rgba(0, 0, 0, .32); }
+.paper-stage:has(.paper-theme-dark) .canvas-zoom { border-color: rgba(226, 232, 240, .14); background: rgba(20, 29, 42, .86); }
+.paper-stage:has(.paper-theme-dark) .canvas-zoom button { color: #CBD5E1; }
 #ink-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
 .canvas-zoom { position: absolute; right: 14px; bottom: 14px; z-index: 6; display: flex; align-items: center; gap: 2px; padding: 4px; border: 1px solid rgba(16, 32, 55, .16); border-radius: 13px; background: rgba(248, 246, 239, .86); box-shadow: 0 8px 28px rgba(19, 30, 47, .18); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
 .canvas-zoom button { display: grid; place-items: center; height: 34px; min-width: 34px; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: #32435B; font-size: 17px; font-weight: 700; }
@@ -1229,6 +1243,15 @@ body.notes-active .fab { display: none; }
 .ocr-status { min-height: 18px; margin: 10px 0 0; color: #71839E; font-size: 11px; text-align: right; }
 .note-menu { position: fixed; z-index: 140; top: calc(58px + env(safe-area-inset-top)); right: 12px; width: 210px; padding: 6px; border: 1px solid var(--stroke-hi); border-radius: 14px; background: rgba(12, 20, 36, .97); box-shadow: 0 18px 50px rgba(0,0,0,.55); }
 .note-menu button { display: block; width: 100%; padding: 12px; border: 0; border-radius: 9px; background: transparent; color: #C5D0E0; font-size: 12.5px; text-align: left; }.note-menu button:hover { background: rgba(148,163,184,.08); }.note-menu button.danger { color: #FB7185; }
+.shortcut-panel { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; padding: 18px; background: rgba(2, 7, 17, .66); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.shortcut-card { width: min(610px, 100%); max-height: calc(100dvh - 36px); padding: 22px; overflow: auto; border: 1px solid rgba(103, 232, 249, .22); border-radius: 25px; background: #101A2A; box-shadow: 0 28px 100px rgba(0, 3, 12, .72); animation: cleanIn 260ms var(--ease-spring) both; }
+.shortcut-card > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.shortcut-card h2 { margin: 4px 0 0; font-family: var(--font-display); font-size: 24px; }
+.shortcut-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.shortcut-grid > div { display: grid; grid-template-columns: 42px 1fr; grid-template-rows: auto auto; column-gap: 10px; padding: 13px; border: 1px solid rgba(148, 163, 184, .12); border-radius: 14px; background: rgba(148, 163, 184, .045); }
+.shortcut-mark { grid-row: 1 / 3; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: rgba(103, 232, 249, .1); color: #83E9F4; font-family: var(--font-display); font-size: 15px; font-weight: 700; }
+.shortcut-grid strong { align-self: end; font-size: 12px; }.shortcut-grid small { color: #7E90AA; font-size: 10px; line-height: 1.35; }
+.keyboard-tip { margin: 14px 2px 0; color: #71839E; font-size: 10.5px; line-height: 1.5; }
 
 /* ---------- Desktop ---------- */
 @media (min-width: 880px) {
@@ -1247,6 +1270,7 @@ body.notes-active .fab { display: none; }
   .note-card-new { min-height: 230px; }
   .save-state { display: flex; }
   .clean-btn { display: flex; width: auto; padding: 0 14px; gap: 7px; font-size: 11.5px; font-weight: 700; }
+  .note-job-btn { display: flex; width: auto; padding: 0 14px; gap: 7px; font-size: 11.5px; font-weight: 700; }
   .note-workspace { flex-direction: row; }
   .instrument-rail { flex-direction: column; width: 92px; min-height: 0; padding: 14px 8px; overflow-x: hidden; overflow-y: auto; border-top: 0; border-right: 1px solid rgba(148, 163, 184, .13); }
   .tool-group { flex-direction: column; }
@@ -1257,6 +1281,7 @@ body.notes-active .fab { display: none; }
   .size-control input { width: 78px; transform: rotate(-90deg) translateX(-23px); }
   .size-control .size-dot-large { margin-top: -42px; }
   .page-style-picker { flex-direction: column; }
+  .paper-theme-picker { flex-direction: column; }
   .pencil-hint { bottom: 14px; }
   .clean-panel { place-items: center; }
 
@@ -1326,6 +1351,9 @@ body.notes-active .fab { display: none; }
   .clean-panel-card { max-height: 100dvh; border-radius: 24px 24px 0 0; border-bottom: 0; padding: 19px; }
   .clean-actions > button { flex: 1; }
   #save-clean { flex-basis: 100%; }
+  .shortcut-panel { place-items: end center; padding: 0; }
+  .shortcut-card { max-height: 88dvh; border-radius: 24px 24px 0 0; padding: 19px; }
+  .shortcut-grid { grid-template-columns: 1fr; }
 }
 
 /* ---------- Animations ---------- */
