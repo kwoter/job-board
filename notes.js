@@ -67,11 +67,14 @@ export function initNotes({ supabase, toast }) {
 
   // A palm landing on the glass arrives as a touch pointer. While the Pencil is
   // in use — and for a moment after it lifts — touch is ignored completely.
-  const PALM_GRACE_MS = 900;
-  const PALM_CONTACT = 38;
+  const PALM_GRACE_MS = 400;
+  const PALM_CONTACT = 58;
 
   function ignoreTouch(event) {
-    if (penDown || Date.now() - lastPenAt < PALM_GRACE_MS) return true;
+    // A second finger is always deliberate — never mistake a pinch for a palm.
+    if (touchPointers.size >= 1) return false;
+    if (penDown) return true;
+    if (Date.now() - lastPenAt < PALM_GRACE_MS) return true;
     if (!penSeen) return false;
     return (event.width || 0) > PALM_CONTACT || (event.height || 0) > PALM_CONTACT;
   }
@@ -567,6 +570,97 @@ export function initNotes({ supabase, toast }) {
     return corners;
   }
 
+
+  function convexHull(points) {
+    const sorted = [...points].sort((a, b) => (a.x - b.x) || (a.y - b.y));
+    if (sorted.length < 3) return sorted;
+    const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lower = [];
+    for (const point of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) lower.pop();
+      lower.push(point);
+    }
+    const upper = [];
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const point = sorted[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) upper.pop();
+      upper.push(point);
+    }
+    lower.pop();
+    upper.pop();
+    return lower.concat(upper);
+  }
+
+  // Smallest rectangle that contains the stroke, at any angle — a box drawn on
+  // the skew is still a box.
+  function minAreaRect(points) {
+    const hull = convexHull(points);
+    if (hull.length < 3) return null;
+    let best = null;
+    for (let i = 0; i < hull.length; i++) {
+      const a = hull[i];
+      const b = hull[(i + 1) % hull.length];
+      const edge = Math.hypot(b.x - a.x, b.y - a.y);
+      if (edge < 1e-6) continue;
+      const ux = (b.x - a.x) / edge;
+      const uy = (b.y - a.y) / edge;
+      let minU = Infinity; let maxU = -Infinity; let minV = Infinity; let maxV = -Infinity;
+      for (const point of hull) {
+        const u = point.x * ux + point.y * uy;
+        const v = -point.x * uy + point.y * ux;
+        minU = Math.min(minU, u); maxU = Math.max(maxU, u);
+        minV = Math.min(minV, v); maxV = Math.max(maxV, v);
+      }
+      const area = (maxU - minU) * (maxV - minV);
+      if (!best || area < best.area) {
+        best = { area, ux, uy, minU, maxU, minV, maxV };
+      }
+    }
+    if (!best) return null;
+    const { ux, uy, minU, maxU, minV, maxV } = best;
+    const corner = (u, v) => ({ x: u * ux - v * uy, y: u * uy + v * ux });
+    return {
+      corners: [corner(minU, minV), corner(maxU, minV), corner(maxU, maxV), corner(minU, maxV)],
+      width: maxU - minU,
+      height: maxV - minV,
+      angle: Math.atan2(uy, ux),
+    };
+  }
+
+  // Algebraic circle fit (Kåsa) — good enough to tell an arc from a wiggle.
+  function fitCircle(points) {
+    let sumX = 0; let sumY = 0;
+    for (const point of points) { sumX += point.x; sumY += point.y; }
+    const meanX = sumX / points.length;
+    const meanY = sumY / points.length;
+    let suu = 0; let svv = 0; let suv = 0; let suuu = 0; let svvv = 0; let suvv = 0; let svuu = 0;
+    for (const point of points) {
+      const u = point.x - meanX;
+      const v = point.y - meanY;
+      suu += u * u; svv += v * v; suv += u * v;
+      suuu += u * u * u; svvv += v * v * v;
+      suvv += u * v * v; svuu += v * u * u;
+    }
+    const determinant = 2 * (suu * svv - suv * suv);
+    if (Math.abs(determinant) < 1e-9) return null;
+    const cu = (svv * (suuu + suvv) - suv * (svvv + svuu)) / determinant;
+    const cv = (suu * (svvv + svuu) - suv * (suuu + suvv)) / determinant;
+    const centre = { x: cu + meanX, y: cv + meanY };
+    const radius = Math.sqrt(cu * cu + cv * cv + (suu + svv) / points.length);
+    return { centre, radius };
+  }
+
+  function arcPoints(centre, radius, from, to) {
+    const sweep = to - from;
+    const steps = Math.max(24, Math.min(160, Math.round(Math.abs(sweep) * radius / 4)));
+    const list = [];
+    for (let i = 0; i <= steps; i++) {
+      const angle = from + sweep * (i / steps);
+      list.push({ x: centre.x + Math.cos(angle) * radius, y: centre.y + Math.sin(angle) * radius, p: .62 });
+    }
+    return list;
+  }
+
   function recogniseShape(points) {
     if (!Array.isArray(points) || points.length < 10) return null;
     let length = 0;
@@ -588,11 +682,22 @@ export function initNotes({ supabase, toast }) {
 
     if (!closed) {
       const span = pointDistance(first, last);
-      if (span < 24 || length > span * 1.14) return null;
-      let worst = 0;
-      for (const point of points) worst = Math.max(worst, distanceToSegment(point, first, last));
-      if (worst > Math.max(3.5, span * .05)) return null;
-      return { kind: 'line', label: 'Line', points: [{ ...first, p: .62 }, { ...last, p: .62 }] };
+      if (span >= 22 && length < span * 1.18) {
+        let worst = 0;
+        for (const point of points) worst = Math.max(worst, distanceToSegment(point, first, last));
+        if (worst < Math.max(4.5, span * .06)) {
+          // Nearly horizontal, vertical or 45 degrees? Make it exact.
+          let end = { x: last.x, y: last.y, p: .62 };
+          const angle = Math.atan2(last.y - first.y, last.x - first.x);
+          const step = Math.PI / 4;
+          const snapped = Math.round(angle / step) * step;
+          if (Math.abs(angle - snapped) < .14) {
+            end = { x: first.x + Math.cos(snapped) * span, y: first.y + Math.sin(snapped) * span, p: .62 };
+          }
+          return { kind: 'line', label: 'Line', points: [{ ...first, p: .62 }, end] };
+        }
+      }
+      return recogniseArc(points, length, diagonal);
     }
 
     const centre = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
@@ -616,30 +721,72 @@ export function initNotes({ supabase, toast }) {
       }
     }
 
-    if (width > 14 && height > 14) {
-      const edgeTolerance = Math.max(4.5, Math.min(width, height) * .17);
-      let onEdge = 0;
+    const box = minAreaRect(points);
+    if (box && box.width > 14 && box.height > 14) {
+      const edgeTolerance = Math.max(5, Math.min(box.width, box.height) * .18);
+      let fits = true;
       for (const point of points) {
-        const nearVertical = Math.min(Math.abs(point.x - minX), Math.abs(point.x - maxX)) < edgeTolerance;
-        const nearHorizontal = Math.min(Math.abs(point.y - minY), Math.abs(point.y - maxY)) < edgeTolerance;
-        if (nearVertical || nearHorizontal) onEdge++;
+        let nearest = Infinity;
+        for (let i = 0; i < 4; i++) {
+          nearest = Math.min(nearest, distanceToSegment(point, box.corners[i], box.corners[(i + 1) % 4]));
+        }
+        if (nearest > edgeTolerance) { fits = false; break; }
       }
-      const perimeter = 2 * (width + height);
-      const ratio = length / perimeter;
-      if (onEdge / points.length > .9 && ratio > .8 && ratio < 1.35) {
-        return {
-          kind: 'rect',
-          label: Math.abs(width - height) < Math.max(width, height) * .12 ? 'Square' : 'Rectangle',
-          points: ringPoints([
-            { x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY },
-          ]),
-        };
+      const ratio = length / (2 * (box.width + box.height));
+      if (fits && ratio > .78 && ratio < 1.4) {
+        // Close to upright? Sit it exactly on the axes rather than 2 degrees off.
+        const step = Math.PI / 2;
+        const drift = box.angle - Math.round(box.angle / step) * step;
+        const corners = Math.abs(drift) < .075
+          ? [{ x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY }]
+          : box.corners;
+        const square = Math.abs(box.width - box.height) < Math.max(box.width, box.height) * .13;
+        return { kind: 'rect', label: square ? 'Square' : 'Rectangle', points: ringPoints(corners) };
       }
     }
 
     const triangle = fitTriangle(points, tolerance);
     if (triangle) return { kind: 'triangle', label: 'Triangle', points: ringPoints(triangle) };
     return null;
+  }
+
+
+  // An open stroke that hugs one circle: quarter, semicircle, anything up to
+  // almost a full turn.
+  function recogniseArc(points, length, diagonal) {
+    if (points.length < 12) return null;
+    const circle = fitCircle(points);
+    if (!circle || !Number.isFinite(circle.radius)) return null;
+    const { centre, radius } = circle;
+    if (radius < 12 || radius > diagonal * 6) return null;
+    let worst = 0;
+    for (const point of points) worst = Math.max(worst, Math.abs(pointDistance(point, centre) - radius));
+    if (worst > Math.max(4.5, radius * .13)) return null;
+
+    // Unwrap the angles so the sweep is continuous, then take the total turn.
+    let previous = Math.atan2(points[0].y - centre.y, points[0].x - centre.x);
+    const from = previous;
+    let total = 0;
+    for (let i = 1; i < points.length; i++) {
+      const angle = Math.atan2(points[i].y - centre.y, points[i].x - centre.x);
+      let delta = angle - previous;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      total += delta;
+      previous = angle;
+    }
+    const sweep = Math.abs(total);
+    if (sweep < .7 || sweep > Math.PI * 2 - .35) return null;
+    // Arc length should account for most of what was drawn, or it is a squiggle.
+    if (length > radius * sweep * 1.3) return null;
+
+    const half = Math.abs(sweep - Math.PI) < .38;
+    const quarter = Math.abs(sweep - Math.PI / 2) < .35;
+    return {
+      kind: 'arc',
+      label: half ? 'Semicircle' : quarter ? 'Quarter arc' : 'Arc',
+      points: arcPoints(centre, radius, from, from + total),
+    };
   }
 
   function setShapeSnap(next) {
