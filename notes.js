@@ -1,5 +1,5 @@
-const DRAWING_VERSION = 2;
-const DEFAULT_DRAWING = () => ({ version: DRAWING_VERSION, strokes: [], view: { x: 0, y: 0, zoom: 1 }, theme: 'light', job_id: null });
+const DRAWING_VERSION = 3;
+const DEFAULT_DRAWING = () => ({ version: DRAWING_VERSION, strokes: [], view: { x: 0, y: 0, zoom: 1 }, theme: 'light', job_ids: [] });
 const MIN_ZOOM = .05;
 const MAX_ZOOM = 8;
 
@@ -35,10 +35,8 @@ export function initNotes({ supabase, toast }) {
   let panGesture = null;
   let pinchGesture = null;
   let paperTheme = 'light';
-  let linkedJobId = null;
+  let linkedJobIds = [];
   let previousInkTool = 'fountain';
-  let lastPencilTap = null;
-  let touchGesture = null;
   let spaceHeld = false;
   let mousePan = null;
 
@@ -121,7 +119,14 @@ export function initNotes({ supabase, toast }) {
     }
     copy.view ||= { x: 0, y: 0, zoom: 1 };
     copy.theme = copy.theme === 'dark' ? 'dark' : 'light';
-    copy.job_id ||= null;
+    copy.strokes = (copy.strokes || []).flatMap((stroke) => (
+      stroke.tool === 'scratch-erase' ? (stroke.removed || []) : [stroke]
+    ));
+    copy.job_ids = Array.isArray(copy.job_ids)
+      ? copy.job_ids.filter(Boolean)
+      : (copy.job_id ? [copy.job_id] : []);
+    delete copy.job_id;
+    copy.version = DRAWING_VERSION;
     return copy;
   }
 
@@ -166,7 +171,7 @@ export function initNotes({ supabase, toast }) {
       const title = document.createElement('strong');
       title.textContent = note.title || 'Untitled note';
       const updated = document.createElement('span');
-      const strokeCount = drawingFor(note).strokes.filter((stroke) => stroke.tool !== 'scratch-erase').length;
+      const strokeCount = migrateDrawing(drawingFor(note)).strokes.filter((stroke) => stroke.tool !== 'eraser').length;
       updated.textContent = `${strokeCount} strokes · ${relativeDate(note.updated_at)}`;
       meta.append(title, updated);
       card.append(preview, meta);
@@ -209,7 +214,7 @@ export function initNotes({ supabase, toast }) {
       zoom: clamp(Number(drawing.view?.zoom) || 1, MIN_ZOOM, MAX_ZOOM),
     };
     paperTheme = drawing.theme;
-    linkedJobId = drawing.job_id;
+    linkedJobIds = drawing.job_ids;
     redoStack = [];
     $('#note-title').value = active.title || 'Untitled note';
     $('#clean-text').value = active.clean_text || '';
@@ -250,7 +255,7 @@ export function initNotes({ supabase, toast }) {
   async function saveActive() {
     if (!active) return;
     active.title = $('#note-title').value.trim() || 'Untitled note';
-    active.drawing = { version: DRAWING_VERSION, strokes, view: camera, theme: paperTheme, job_id: linkedJobId };
+    active.drawing = { version: DRAWING_VERSION, strokes, view: camera, theme: paperTheme, job_ids: linkedJobIds };
     active.clean_text = $('#clean-text').value;
     active.updated_at = new Date().toISOString();
     saveLocal(active);
@@ -328,9 +333,6 @@ export function initNotes({ supabase, toast }) {
     if (event.pointerType === 'touch') {
       const point = screenPoint(event);
       touchPointers.set(event.pointerId, point);
-      if (!touchGesture) touchGesture = { startedAt: performance.now(), maxTouches: 1, moved: false, starts: new Map() };
-      touchGesture.maxTouches = Math.max(touchGesture.maxTouches, touchPointers.size);
-      touchGesture.starts.set(event.pointerId, point);
       if (touchPointers.size === 1) {
         panGesture = { start: point, camera: { ...camera } };
         pinchGesture = null;
@@ -349,11 +351,9 @@ export function initNotes({ supabase, toast }) {
       tool,
       colour: tool === 'eraser' ? '#000000' : colour,
       size,
-      startedAt: performance.now(),
       points: [worldPoint(event)],
     };
     redoStack = [];
-    $('#pencil-hint').hidden = true;
   }
 
   function movePointer(event) {
@@ -362,8 +362,6 @@ export function initNotes({ supabase, toast }) {
       event.preventDefault();
       const nextPoint = screenPoint(event);
       touchPointers.set(event.pointerId, nextPoint);
-      const touchStart = touchGesture?.starts.get(event.pointerId);
-      if (touchStart && pointDistance(touchStart, nextPoint) > 12) touchGesture.moved = true;
       if (touchPointers.size >= 2 && pinchGesture) {
         const [a, b] = [...touchPointers.values()];
         const centre = midpoint(a, b);
@@ -415,17 +413,7 @@ export function initNotes({ supabase, toast }) {
       } else if (touchPointers.size === 0) {
         panGesture = null;
         pinchGesture = null;
-        const gesture = touchGesture;
-        touchGesture = null;
-        if (gesture && !gesture.moved && performance.now() - gesture.startedAt < 420 && gesture.maxTouches === 2) {
-          undo();
-          toast('Undo');
-        } else if (gesture && !gesture.moved && performance.now() - gesture.startedAt < 420 && gesture.maxTouches >= 3) {
-          redo();
-          toast('Redo');
-        } else {
-          scheduleSave();
-        }
+        scheduleSave();
       }
       return;
     }
@@ -443,35 +431,7 @@ export function initNotes({ supabase, toast }) {
     const finishedStroke = currentStroke;
     currentStroke = null;
     drawingPointerId = null;
-    const isPencilTap = event.pointerType === 'pen' && isTinyStroke(finishedStroke);
-    if (isPencilTap && lastPencilTap
-      && performance.now() - lastPencilTap.time < 380
-      && pointDistance(screenPoint(event), lastPencilTap.screen) < 34) {
-      const index = strokes.indexOf(lastPencilTap.stroke);
-      if (index >= 0) strokes.splice(index, 1);
-      lastPencilTap = null;
-      toggleEraserShortcut();
-      redraw();
-      updateHistoryButtons();
-      scheduleSave();
-      return;
-    }
-    const savedStroke = { ...finishedStroke };
-    delete savedStroke.startedAt;
-    if (isPencilTap) {
-      strokes.push(savedStroke);
-      lastPencilTap = { time: performance.now(), screen: screenPoint(event), stroke: savedStroke };
-    } else {
-      lastPencilTap = null;
-      const erased = finishedStroke.tool !== 'eraser' && isScratchGesture(finishedStroke)
-        ? eraseUnderScratch(finishedStroke)
-        : [];
-      if (erased.length) {
-        strokes.push({ tool: 'scratch-erase', points: [], removed: erased });
-        toast(`Erased ${erased.length} ${erased.length === 1 ? 'stroke' : 'strokes'}`);
-      }
-      else strokes.push(savedStroke);
-    }
+    strokes.push(finishedStroke);
     redraw();
     updateHistoryButtons();
     scheduleSave();
@@ -483,81 +443,6 @@ export function initNotes({ supabase, toast }) {
 
   function pointDistance(a, b) {
     return Math.hypot(a.x - b.x, a.y - b.y);
-  }
-
-  function strokeMetrics(stroke) {
-    const points = stroke.points || [];
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    let length = 0;
-    let reversals = 0;
-    let lastDirection = 0;
-    const directionThreshold = 3 / camera.zoom;
-    points.forEach((point, index) => {
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-      if (!index) return;
-      const previous = points[index - 1];
-      const dx = point.x - previous.x;
-      const dy = point.y - previous.y;
-      length += Math.hypot(dx, dy);
-      if (Math.abs(dx) > directionThreshold) {
-        const direction = Math.sign(dx);
-        if (lastDirection && direction !== lastDirection) reversals++;
-        lastDirection = direction;
-      }
-    });
-    return { minX, minY, maxX, maxY, length, reversals };
-  }
-
-  function isTinyStroke(stroke) {
-    const metrics = strokeMetrics(stroke);
-    return metrics.length < 9 / camera.zoom
-      && performance.now() - (stroke.startedAt || 0) < 300;
-  }
-
-  function isScratchGesture(stroke) {
-    if ((stroke.points || []).length < 10) return false;
-    const metrics = strokeMetrics(stroke);
-    const width = metrics.maxX - metrics.minX;
-    const height = metrics.maxY - metrics.minY;
-    const diagonal = Math.hypot(width, height);
-    const duration = performance.now() - (stroke.startedAt || 0);
-    return duration < 1500
-      && metrics.reversals >= 3
-      && width > 24 / camera.zoom
-      && metrics.length > diagonal * 3.1;
-  }
-
-  function eraseUnderScratch(scratch) {
-    const metrics = strokeMetrics(scratch);
-    const padding = 14 / camera.zoom;
-    const box = {
-      minX: metrics.minX - padding,
-      minY: metrics.minY - padding,
-      maxX: metrics.maxX + padding,
-      maxY: metrics.maxY + padding,
-    };
-    const erased = [];
-    strokes = strokes.filter((stroke) => {
-      if (stroke.tool === 'eraser' || stroke.tool === 'scratch-erase') return true;
-      const hit = (stroke.points || []).some((point, index, points) => {
-        if (point.x >= box.minX && point.x <= box.maxX && point.y >= box.minY && point.y <= box.maxY) return true;
-        if (!index) return false;
-        const previous = points[index - 1];
-        return Math.max(previous.x, point.x) >= box.minX
-          && Math.min(previous.x, point.x) <= box.maxX
-          && Math.max(previous.y, point.y) >= box.minY
-          && Math.min(previous.y, point.y) <= box.maxY;
-      });
-      if (hit) erased.push(stroke);
-      return !hit;
-    });
-    return erased;
   }
 
   function toggleEraserShortcut() {
@@ -842,14 +727,33 @@ export function initNotes({ supabase, toast }) {
   function updateJobButton() {
     const button = $('#note-add-job');
     const label = $('span', button);
-    button.classList.toggle('is-added', Boolean(linkedJobId));
-    label.textContent = linkedJobId ? 'View in jobs' : 'Add to jobs';
-    button.setAttribute('aria-label', linkedJobId ? 'View note in jobs' : 'Add note to jobs');
+    const count = linkedJobIds.length;
+    button.classList.toggle('is-added', count > 0);
+    label.textContent = count > 1 ? `View ${count} jobs` : (count === 1 ? 'View in jobs' : 'Add to jobs');
+    button.setAttribute('aria-label', count ? 'View jobs created from this note' : 'Read handwriting and add separate jobs');
+  }
+
+  function splitRecognisedJobs(text) {
+    const heading = /^(jobs?|tasks?|to[ -]?do(?: list)?)\s*:?[\s]*$/i;
+    const marker = /^\s*(?:[-–—*•·]|(?:\d+|[a-z])[.)]|\[[ x✓]?\])\s*/i;
+    const rawLines = String(text || '')
+      .replace(/\r/g, '')
+      .split(/\n+/)
+      .flatMap((line) => line.split(/\s*[;•]\s*/))
+      .map((line) => line.replace(marker, '').replace(/\s+/g, ' ').trim())
+      .filter((line) => line.length > 1 && !heading.test(line));
+    const seen = new Set();
+    return rawLines.filter((line) => {
+      const key = line.toLocaleLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   async function addNoteToJobs() {
     if (!active) return;
-    if (linkedJobId) {
+    if (linkedJobIds.length) {
       await closeNote();
       switchScreen('jobs');
       toast('Showing your job list');
@@ -857,32 +761,54 @@ export function initNotes({ supabase, toast }) {
     }
     const button = $('#note-add-job');
     button.classList.add('is-loading');
-    const title = $('#note-title').value.trim() || 'Handwritten note';
-    const cleanText = ($('#clean-text').value || active.clean_text || '').trim();
-    const { data, error } = await supabase
-      .from('board_jobs')
-      .insert({
-        title,
-        client: null,
-        notes: cleanText || 'Created from a handwritten page in Notes Studio.',
-        due_at: null,
-        remind_at: null,
-        priority: 'normal',
-        status: 'todo',
-        completed_at: null,
-      })
-      .select('id')
-      .single();
-    button.classList.remove('is-loading');
-    if (error || !data?.id) {
-      toast('Could not add that job');
+    const noteTitle = $('#note-title').value.trim() || 'Handwritten note';
+    let cleanText = ($('#clean-text').value || active.clean_text || '').trim();
+    const hasInk = strokes.some((stroke) => stroke.tool !== 'eraser' && stroke.tool !== 'scratch-erase');
+    if (hasInk) {
+      try {
+        toast('Reading your handwriting…');
+        cleanText = await recognisePage();
+        $('#clean-text').value = cleanText;
+      } catch {
+        if (!cleanText) {
+          button.classList.remove('is-loading');
+          openCleanPanel();
+          $('#ocr-status').textContent = 'I could not read this clearly. Write or correct the job list in the box, then tap Add to jobs again.';
+          return;
+        }
+      }
+    }
+    const tasks = splitRecognisedJobs(cleanText);
+    if (!tasks.length) {
+      button.classList.remove('is-loading');
+      openCleanPanel();
+      $('#ocr-status').textContent = 'I could not find a job. Put each job on its own line, then tap Add to jobs again.';
       return;
     }
-    linkedJobId = data.id;
+    const records = tasks.map((task) => ({
+      title: task.slice(0, 140),
+      client: null,
+      notes: `From handwritten note “${noteTitle}”.\n\n${task}`,
+      due_at: null,
+      remind_at: null,
+      priority: 'normal',
+      status: 'todo',
+      completed_at: null,
+    }));
+    const { data, error } = await supabase
+      .from('board_jobs')
+      .insert(records)
+      .select('id')
+    button.classList.remove('is-loading');
+    if (error || !data?.length) {
+      toast('Could not add those jobs');
+      return;
+    }
+    linkedJobIds = data.map((job) => job.id);
     active.clean_text = cleanText;
     await saveActive();
     updateJobButton();
-    toast('Added to your To Do list');
+    toast(`${data.length} ${data.length === 1 ? 'job' : 'jobs'} added separately`);
   }
 
   function openCleanPanel() {
@@ -903,8 +829,23 @@ export function initNotes({ supabase, toast }) {
     });
   }
 
+  async function recognisePage(onProgress = null) {
+    const visibleStrokes = strokes.filter((stroke) => stroke.tool !== 'eraser' && stroke.tool !== 'scratch-erase');
+    if (!visibleStrokes.length) throw new Error('empty page');
+    const Tesseract = await loadTesseract();
+    const image = renderPage(1.35).toDataURL('image/png');
+    const result = await Tesseract.recognize(image, 'eng', {
+      logger: (message) => {
+        if (message.status === 'recognizing text') onProgress?.(Math.round((message.progress || 0) * 100));
+      },
+    });
+    const text = result?.data?.text?.trim() || '';
+    if (!text) throw new Error('unreadable page');
+    return text;
+  }
+
   async function readPage() {
-    if (!strokes.length) {
+    if (!strokes.some((stroke) => stroke.tool !== 'eraser' && stroke.tool !== 'scratch-erase')) {
       $('#ocr-status').textContent = 'Add some handwriting to the page first.';
       return;
     }
@@ -913,22 +854,11 @@ export function initNotes({ supabase, toast }) {
     button.classList.add('is-loading');
     status.textContent = 'Preparing handwriting reader…';
     try {
-      const Tesseract = await loadTesseract();
-      const image = renderPage(1).toDataURL('image/png');
-      const result = await Tesseract.recognize(image, 'eng', {
-        logger: (message) => {
-          if (message.status === 'recognizing text') status.textContent = `Reading your page… ${Math.round((message.progress || 0) * 100)}%`;
-        },
-      });
-      const text = result?.data?.text?.trim() || '';
-      if (text) {
-        $('#clean-text').value = text;
-        status.textContent = 'Finished. Check the text, then save the clean copy.';
-      } else {
-        status.textContent = 'I could not read that page clearly. Try iPad Scribble in the box above.';
-      }
+      const text = await recognisePage((progress) => { status.textContent = `Reading your page… ${progress}%`; });
+      $('#clean-text').value = text;
+      status.textContent = 'Finished. Put each job on its own line, then save or add it to jobs.';
     } catch {
-      status.textContent = 'The reader could not load. You can still use Apple Pencil Scribble in the box above.';
+      status.textContent = 'I could not read that page clearly. You can write or correct the list in the box above.';
     } finally {
       button.classList.remove('is-loading');
     }
@@ -1001,12 +931,6 @@ export function initNotes({ supabase, toast }) {
     toast('Clean copy saved');
   });
   $('#note-more').addEventListener('click', () => { $('#note-menu').hidden = !$('#note-menu').hidden; });
-  $('#show-shortcuts').addEventListener('click', () => {
-    $('#note-menu').hidden = true;
-    $('#shortcut-panel').hidden = false;
-  });
-  $('#shortcut-close').addEventListener('click', () => { $('#shortcut-panel').hidden = true; });
-  $('#shortcut-panel').addEventListener('click', (event) => { if (event.target.id === 'shortcut-panel') event.currentTarget.hidden = true; });
   $('#export-note').addEventListener('click', exportPage);
   $('#delete-note').addEventListener('click', deleteActive);
   document.addEventListener('pointerdown', (event) => {
