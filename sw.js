@@ -1,4 +1,4 @@
-const CACHE = 'field-v10';
+const CACHE = 'field-v11';
 const SHELL = [
   './',
   './index.html',
