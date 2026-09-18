@@ -39,6 +39,18 @@ export function initNotes({ supabase, toast }) {
   let previousInkTool = 'fountain';
   let spaceHeld = false;
   let mousePan = null;
+  let cacheCanvas = null;
+  let cacheCtx = null;
+  let cacheKey = '';
+  let liveCanvas = null;
+  let liveCtx = null;
+  let liveDrawn = 0;
+  let liveKey = '';
+  let frameHandle = 0;
+  let pendingLive = null;
+  let inkStamp = 0;
+  let paperKey = '';
+  let shapeSnap = localStorage.getItem('field-shape-snap') !== 'off';
   let penDown = false;
   let lastPenAt = 0;
   let penSeen = false;
@@ -231,6 +243,7 @@ export function initNotes({ supabase, toast }) {
     active = structuredClone(note);
     const drawing = migrateDrawing(drawingFor(note));
     strokes = drawing.strokes;
+    inkStamp++;
     camera = {
       x: Number(drawing.view?.x) || 0,
       y: Number(drawing.view?.y) || 0,
@@ -385,6 +398,7 @@ export function initNotes({ supabase, toast }) {
     }
     drawingPointerId = event.pointerId;
     currentStroke = {
+      id: ++inkStamp,
       tool,
       colour: tool === 'eraser' ? '#000000' : colour,
       size,
@@ -410,12 +424,12 @@ export function initNotes({ supabase, toast }) {
         camera.zoom = zoom;
         camera.x = pinchGesture.anchor.x - centre.x / zoom;
         camera.y = pinchGesture.anchor.y - centre.y / zoom;
-        redraw();
+        requestRedraw();
       } else if (touchPointers.size === 1 && panGesture) {
         const point = [...touchPointers.values()][0];
         camera.x = panGesture.camera.x - (point.x - panGesture.start.x) / camera.zoom;
         camera.y = panGesture.camera.y - (point.y - panGesture.start.y) / camera.zoom;
-        redraw();
+        requestRedraw();
       }
       return;
     }
@@ -423,7 +437,7 @@ export function initNotes({ supabase, toast }) {
       const point = screenPoint(event);
       camera.x = mousePan.camera.x - (point.x - mousePan.start.x) / camera.zoom;
       camera.y = mousePan.camera.y - (point.y - mousePan.start.y) / camera.zoom;
-      redraw();
+      requestRedraw();
       return;
     }
     if (!currentStroke || event.pointerId !== drawingPointerId) return;
@@ -437,7 +451,7 @@ export function initNotes({ supabase, toast }) {
       const dy = point.y - previous.y;
       if ((dx * dx) + (dy * dy) > .18) currentStroke.points.push(point);
     }
-    redraw(currentStroke);
+    requestRedraw(currentStroke);
   }
 
   function endPointer(event) {
@@ -453,7 +467,9 @@ export function initNotes({ supabase, toast }) {
         ? touchPointers.get(event.pointerId)
         : null;
       touchPointers.delete(event.pointerId);
-      if (tap && tool === 'fill' && !penSeen && touchPointers.size === 0) {
+      const smallContact = (event.width || 0) <= PALM_CONTACT && (event.height || 0) <= PALM_CONTACT;
+      if (tap && tool === 'fill' && smallContact && touchPointers.size === 0
+        && Date.now() - lastPenAt > PALM_GRACE_MS) {
         touchTap = null;
         panGesture = null;
         pinchGesture = null;
@@ -488,10 +504,152 @@ export function initNotes({ supabase, toast }) {
     const finishedStroke = currentStroke;
     currentStroke = null;
     drawingPointerId = null;
+    if (shapeSnap && finishedStroke.tool !== 'eraser') {
+      const shape = recogniseShape(finishedStroke.points);
+      if (shape) {
+        finishedStroke.points = shape.points;
+        finishedStroke.shape = shape.kind;
+        toast(`${shape.label} tidied up`);
+      }
+    }
     strokes.push(finishedStroke);
+    inkStamp++;
     redraw();
     updateHistoryButtons();
     scheduleSave();
+  }
+
+
+  // ---- Shape tidying -----------------------------------------------------
+  // Run once, when the stroke is finished. Only replaces the stroke when the
+  // fit is convincing; anything ambiguous is left exactly as drawn.
+  function distanceToSegment(point, a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared < 1e-9) return pointDistance(point, a);
+    let t = ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy));
+  }
+
+  function ringPoints(list) {
+    const ring = list.map((point) => ({ x: point.x, y: point.y, p: .62 }));
+    ring.push({ ...ring[0] });
+    return ring;
+  }
+
+  function ellipsePoints(centre, rx, ry) {
+    const steps = Math.max(40, Math.min(120, Math.round((rx + ry) * .7)));
+    const list = [];
+    for (let i = 0; i < steps; i++) {
+      const angle = (i / steps) * Math.PI * 2;
+      list.push({ x: centre.x + Math.cos(angle) * rx, y: centre.y + Math.sin(angle) * ry });
+    }
+    return ringPoints(list);
+  }
+
+  function fitTriangle(points, tolerance) {
+    const centroid = points.reduce((sum, point) => ({ x: sum.x + point.x / points.length, y: sum.y + point.y / points.length }), { x: 0, y: 0 });
+    const a = points.reduce((best, point) => (pointDistance(point, centroid) > pointDistance(best, centroid) ? point : best), points[0]);
+    const b = points.reduce((best, point) => (pointDistance(point, a) > pointDistance(best, a) ? point : best), points[0]);
+    const c = points.reduce((best, point) => (distanceToSegment(point, a, b) > distanceToSegment(best, a, b) ? point : best), points[0]);
+    if (distanceToSegment(c, a, b) < tolerance * 1.5) return null;
+    const corners = [a, b, c];
+    for (const point of points) {
+      const nearest = Math.min(
+        distanceToSegment(point, a, b),
+        distanceToSegment(point, b, c),
+        distanceToSegment(point, c, a),
+      );
+      if (nearest > tolerance) return null;
+    }
+    return corners;
+  }
+
+  function recogniseShape(points) {
+    if (!Array.isArray(points) || points.length < 10) return null;
+    let length = 0;
+    for (let i = 1; i < points.length; i++) length += pointDistance(points[i - 1], points[i]);
+    let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity;
+    for (const point of points) {
+      minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y);
+    }
+    const width = maxX - minX;
+    const height = maxY - minY;
+    const diagonal = Math.hypot(width, height);
+    if (diagonal < 26 || length < 34) return null;
+    if (length > diagonal * 9) return null;            // scribble, or writing
+    const first = points[0];
+    const last = points[points.length - 1];
+    const closed = pointDistance(first, last) < Math.max(16, diagonal * .25);
+    const tolerance = Math.max(4.5, diagonal * .075);
+
+    if (!closed) {
+      const span = pointDistance(first, last);
+      if (span < 24 || length > span * 1.14) return null;
+      let worst = 0;
+      for (const point of points) worst = Math.max(worst, distanceToSegment(point, first, last));
+      if (worst > Math.max(3.5, span * .05)) return null;
+      return { kind: 'line', label: 'Line', points: [{ ...first, p: .62 }, { ...last, p: .62 }] };
+    }
+
+    const centre = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+    const rx = width / 2;
+    const ry = height / 2;
+    if (rx > 9 && ry > 9) {
+      let worst = 0;
+      for (const point of points) {
+        const nx = (point.x - centre.x) / rx;
+        const ny = (point.y - centre.y) / ry;
+        worst = Math.max(worst, Math.abs(Math.hypot(nx, ny) - 1));
+      }
+      if (worst < .17) {
+        const round = Math.abs(rx - ry) < Math.max(rx, ry) * .14;
+        const radius = (rx + ry) / 2;
+        return {
+          kind: 'ellipse',
+          label: round ? 'Circle' : 'Ellipse',
+          points: round ? ellipsePoints(centre, radius, radius) : ellipsePoints(centre, rx, ry),
+        };
+      }
+    }
+
+    if (width > 14 && height > 14) {
+      const edgeTolerance = Math.max(4.5, Math.min(width, height) * .17);
+      let onEdge = 0;
+      for (const point of points) {
+        const nearVertical = Math.min(Math.abs(point.x - minX), Math.abs(point.x - maxX)) < edgeTolerance;
+        const nearHorizontal = Math.min(Math.abs(point.y - minY), Math.abs(point.y - maxY)) < edgeTolerance;
+        if (nearVertical || nearHorizontal) onEdge++;
+      }
+      const perimeter = 2 * (width + height);
+      const ratio = length / perimeter;
+      if (onEdge / points.length > .9 && ratio > .8 && ratio < 1.35) {
+        return {
+          kind: 'rect',
+          label: Math.abs(width - height) < Math.max(width, height) * .12 ? 'Square' : 'Rectangle',
+          points: ringPoints([
+            { x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY },
+          ]),
+        };
+      }
+    }
+
+    const triangle = fitTriangle(points, tolerance);
+    if (triangle) return { kind: 'triangle', label: 'Triangle', points: ringPoints(triangle) };
+    return null;
+  }
+
+  function setShapeSnap(next) {
+    shapeSnap = next;
+    localStorage.setItem('field-shape-snap', shapeSnap ? 'on' : 'off');
+    const button = $('#shape-snap');
+    if (button) {
+      button.classList.toggle('is-active', shapeSnap);
+      button.setAttribute('aria-pressed', String(shapeSnap));
+    }
   }
 
   function midpoint(a, b) {
@@ -530,20 +688,98 @@ export function initNotes({ supabase, toast }) {
     if (save) scheduleSave();
   }
 
+  function viewKey() {
+    return `${camera.x.toFixed(3)}|${camera.y.toFixed(3)}|${camera.zoom.toFixed(4)}|${paperTheme}`;
+  }
+
+  function layerFor(existing, name) {
+    const surface = existing || document.createElement('canvas');
+    if (surface.width !== canvas.width || surface.height !== canvas.height) {
+      surface.width = canvas.width;
+      surface.height = canvas.height;
+      if (name === 'cache') cacheKey = '';
+      if (name === 'live') liveKey = '';
+    }
+    return surface;
+  }
+
+  // Committed ink is rendered once into a cache layer and the in-progress stroke
+  // is appended to its own layer a segment at a time, so a long stroke costs the
+  // same per frame as a short one.
   function redraw(liveStroke = null) {
-    const dpr = canvas.width / Math.max(1, canvas.getBoundingClientRect().width);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (frameHandle) { cancelAnimationFrame(frameHandle); frameHandle = 0; }
+    pendingLive = null;
+    const rect = canvas.getBoundingClientRect();
+    const dpr = canvas.width / Math.max(1, rect.width);
     const map = (point) => ({
       x: (point.x - camera.x) * camera.zoom * dpr,
       y: (point.y - camera.y) * camera.zoom * dpr,
     });
     const strokeScale = camera.zoom * dpr;
-    paintStrokes(ctx, strokes, map, strokeScale);
-    if (liveStroke) paintStroke(ctx, liveStroke, map, strokeScale);
+    const view = viewKey();
+
+    cacheCanvas = layerFor(cacheCanvas, 'cache');
+    if (!cacheCtx || cacheCtx.canvas !== cacheCanvas) cacheCtx = cacheCanvas.getContext('2d');
+    const nextCacheKey = `${view}|${strokes.length}|${inkStamp}`;
+    if (cacheKey !== nextCacheKey) {
+      cacheCtx.setTransform(1, 0, 0, 1, 0, 0);
+      cacheCtx.clearRect(0, 0, cacheCanvas.width, cacheCanvas.height);
+      paintStrokes(cacheCtx, strokes, map, strokeScale);
+      cacheCtx.globalCompositeOperation = 'source-over';
+      cacheCtx.globalAlpha = 1;
+      cacheKey = nextCacheKey;
+    }
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
-    updatePaperGrid();
-    $('#zoom-level').textContent = `${Math.round(camera.zoom * 100)}%`;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(cacheCanvas, 0, 0);
+
+    if (liveStroke && (liveStroke.points || []).length > 1) {
+      liveCanvas = layerFor(liveCanvas, 'live');
+      if (!liveCtx || liveCtx.canvas !== liveCanvas) liveCtx = liveCanvas.getContext('2d');
+      const nextLiveKey = `${view}|${liveStroke.id}`;
+      if (liveKey !== nextLiveKey) {
+        liveCtx.setTransform(1, 0, 0, 1, 0, 0);
+        liveCtx.clearRect(0, 0, liveCanvas.width, liveCanvas.height);
+        liveKey = nextLiveKey;
+        liveDrawn = 0;
+      }
+      if (liveStroke.points.length > liveDrawn + 1 || liveDrawn === 0) {
+        paintStroke(liveCtx, liveStroke, map, strokeScale, paperTheme, {
+          from: Math.max(1, liveDrawn),
+          flat: true,
+        });
+        liveDrawn = liveStroke.points.length - 1;
+      }
+      const preset = toolPreset[liveStroke.tool] || toolPreset.fountain;
+      ctx.globalCompositeOperation = preset.composite;
+      ctx.globalAlpha = preset.opacity;
+      ctx.drawImage(liveCanvas, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+    } else if (liveKey) {
+      liveKey = '';
+      liveDrawn = 0;
+    }
+
+    if (paperKey !== view) {
+      paperKey = view;
+      updatePaperGrid();
+      $('#zoom-level').textContent = `${Math.round(camera.zoom * 100)}%`;
+    }
+  }
+
+  function requestRedraw(liveStroke = null) {
+    pendingLive = liveStroke;
+    if (frameHandle) return;
+    frameHandle = requestAnimationFrame(() => {
+      frameHandle = 0;
+      const live = pendingLive;
+      pendingLive = null;
+      redraw(live);
+    });
   }
 
   function themedColour(value, displayTheme) {
@@ -582,19 +818,21 @@ export function initNotes({ supabase, toast }) {
     for (const stroke of list) if (stroke.tool !== 'fill') paintStroke(target, stroke, map, strokeScale, displayTheme);
   }
 
-  function paintStroke(target, stroke, map, strokeScale = 1, displayTheme = paperTheme) {
+  function paintStroke(target, stroke, map, strokeScale = 1, displayTheme = paperTheme, options = {}) {
     if (stroke.tool === 'fill') { paintFill(target, stroke, map, displayTheme); return; }
     const preset = toolPreset[stroke.tool] || toolPreset.fountain;
     const points = stroke.points || [];
     if (points.length < 2) return;
+    const from = Math.max(1, options.from || 1);
+    const flat = options.flat === true;
     target.save();
-    target.globalCompositeOperation = preset.composite;
-    target.globalAlpha = preset.opacity;
+    target.globalCompositeOperation = flat ? 'source-over' : preset.composite;
+    target.globalAlpha = flat ? 1 : preset.opacity;
     target.strokeStyle = themedColour(stroke.colour, displayTheme);
     target.lineCap = 'round';
     target.lineJoin = 'round';
     const base = Math.max(.55, Number(stroke.size || 4) * preset.width * strokeScale);
-    for (let i = 1; i < points.length; i++) {
+    for (let i = from; i < points.length; i++) {
       const a = points[i - 1];
       const b = points[i];
       const from = map(a);
@@ -608,7 +846,7 @@ export function initNotes({ supabase, toast }) {
       target.lineTo(to.x, to.y);
       target.stroke();
     }
-    if (stroke.tool === 'pencil') {
+    if (stroke.tool === 'pencil' && !flat) {
       target.globalAlpha = .17;
       target.lineWidth = Math.max(.45, base * .42);
       const first = map(points[0]);
@@ -684,6 +922,30 @@ export function initNotes({ supabase, toast }) {
     return ring.length >= 3 ? ring : points;
   }
 
+  function dilate(mask, width, height, times) {
+    if (times <= 0) return mask;
+    let source = mask;
+    let target = new Uint8Array(mask.length);
+    for (let pass = 0; pass < times; pass++) {
+      target.set(source);
+      for (let y = 0; y < height; y++) {
+        const row = y * width;
+        for (let x = 0; x < width; x++) {
+          const index = row + x;
+          if (source[index]) continue;
+          if ((x > 0 && source[index - 1])
+            || (x < width - 1 && source[index + 1])
+            || (y > 0 && source[index - width])
+            || (y < height - 1 && source[index + width])) target[index] = 1;
+        }
+      }
+      const swap = source === mask ? new Uint8Array(mask.length) : source;
+      source = target;
+      target = swap;
+    }
+    return source;
+  }
+
   function loopArea(loop) {
     let total = 0;
     for (let i = 0; i < loop.length; i++) {
@@ -724,10 +986,34 @@ export function initNotes({ supabase, toast }) {
     }
     const pixels = bufferCtx.getImageData(0, 0, width, height).data;
     const area = width * height;
-    const seed = seedY * width + seedX;
-    if (pixels[seed * 4 + 3] >= FILL_ALPHA_GATE) {
-      toast('Tap inside a gap, not on a line');
-      return;
+
+    // Hand-drawn outlines rarely meet. Thicken the walls just for the flood so
+    // small gaps seal, then grow the filled area back out by the same amount so
+    // the colour still runs right up to the real ink.
+    const gapClose = Math.max(2, Math.round(3 * scale));
+    const walls = new Uint8Array(area);
+    for (let i = 0; i < area; i++) if (pixels[i * 4 + 3] >= FILL_ALPHA_GATE) walls[i] = 1;
+    const thickWalls = dilate(walls, width, height, gapClose);
+
+    // Landing on a line is a near miss, not a mistake — step off it.
+    let seed = seedY * width + seedX;
+    if (thickWalls[seed]) {
+      seed = -1;
+      const reach = gapClose + 10;
+      search: for (let radius = 1; radius <= reach; radius++) {
+        for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+          const x = seedX + dx;
+          const y = seedY + dy;
+          if (x < 1 || y < 1 || x >= width - 1 || y >= height - 1) continue;
+          const candidate = y * width + x;
+          if (!thickWalls[candidate]) { seed = candidate; break search; }
+        }
+      }
+      if (seed < 0) {
+        toast('No space to fill there');
+        return;
+      }
     }
 
     const inside = new Uint8Array(area);
@@ -742,26 +1028,22 @@ export function initNotes({ supabase, toast }) {
       const y = (index - x) / width;
       if (x === 0 || y === 0 || x === width - 1 || y === height - 1) { escaped = true; break; }
       let next = index - 1;
-      if (!inside[next] && pixels[next * 4 + 3] < FILL_ALPHA_GATE) { inside[next] = 1; stack[top++] = next; }
+      if (!inside[next] && !thickWalls[next]) { inside[next] = 1; stack[top++] = next; }
       next = index + 1;
-      if (!inside[next] && pixels[next * 4 + 3] < FILL_ALPHA_GATE) { inside[next] = 1; stack[top++] = next; }
+      if (!inside[next] && !thickWalls[next]) { inside[next] = 1; stack[top++] = next; }
       next = index - width;
-      if (!inside[next] && pixels[next * 4 + 3] < FILL_ALPHA_GATE) { inside[next] = 1; stack[top++] = next; }
+      if (!inside[next] && !thickWalls[next]) { inside[next] = 1; stack[top++] = next; }
       next = index + width;
-      if (!inside[next] && pixels[next * 4 + 3] < FILL_ALPHA_GATE) { inside[next] = 1; stack[top++] = next; }
+      if (!inside[next] && !thickWalls[next]) { inside[next] = 1; stack[top++] = next; }
     }
     if (escaped) {
       toast('That outline is open — close the gap, then fill');
       return;
     }
 
-    // Grow by a pixel so the colour tucks under the anti-aliased edge of the ink.
-    const grown = Uint8Array.from(inside);
-    for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
-      const index = y * width + x;
-      if (inside[index]) continue;
-      if (inside[index - 1] || inside[index + 1] || inside[index - width] || inside[index + width]) grown[index] = 1;
-    }
+    // Grow back under the ink: the gap-closing margin, plus one for the
+    // anti-aliased edge of the stroke itself.
+    const grown = dilate(inside, width, height, gapClose + 1);
 
     const vertexKey = (x, y) => x * (height + 1) + y;
     const starts = new Map();
@@ -826,6 +1108,7 @@ export function initNotes({ supabase, toast }) {
     })));
 
     strokes.push({ tool: 'fill', colour, contours });
+    inkStamp++;
     redoStack = [];
     redraw();
     updateHistoryButtons();
@@ -909,6 +1192,7 @@ export function initNotes({ supabase, toast }) {
     const stroke = strokes.pop();
     if (stroke?.tool === 'scratch-erase') strokes.push(...(stroke.removed || []));
     if (stroke) redoStack.push(stroke);
+    inkStamp++;
     redraw();
     updateHistoryButtons();
     scheduleSave();
@@ -923,6 +1207,7 @@ export function initNotes({ supabase, toast }) {
     } else if (stroke) {
       strokes.push(stroke);
     }
+    inkStamp++;
     redraw();
     updateHistoryButtons();
     scheduleSave();
@@ -931,7 +1216,7 @@ export function initNotes({ supabase, toast }) {
   function setTool(next) {
     if (next !== 'eraser') previousInkTool = next;
     tool = next;
-    $$('.ink-tool').forEach((button) => {
+    $$('.ink-tool[data-tool]').forEach((button) => {
       const selected = button.dataset.tool === tool;
       button.classList.toggle('is-active', selected);
       button.setAttribute('aria-checked', String(selected));
@@ -1221,9 +1506,14 @@ export function initNotes({ supabase, toast }) {
   window.addEventListener('resize', resizeCanvas);
   new ResizeObserver(resizeCanvas).observe(paper);
 
-  $$('.ink-tool').forEach((button) => button.addEventListener('click', () => setTool(button.dataset.tool)));
+  $$('.ink-tool[data-tool]').forEach((button) => button.addEventListener('click', () => setTool(button.dataset.tool)));
   $$('.ink-color').forEach((button) => button.addEventListener('click', () => selectColour(button.dataset.color)));
   $('#ink-wheel').addEventListener('input', (event) => selectColour(event.target.value));
+  $('#shape-snap').addEventListener('click', () => {
+    setShapeSnap(!shapeSnap);
+    toast(shapeSnap ? 'Shapes will be tidied up' : 'Shapes left as drawn');
+  });
+  setShapeSnap(shapeSnap);
   $$('.paper-style').forEach((button) => button.addEventListener('click', () => setPaper(button.dataset.paper)));
   $$('.paper-theme').forEach((button) => button.addEventListener('click', () => setPaperTheme(button.dataset.theme)));
   $('#ink-size').addEventListener('input', (event) => { size = Number(event.target.value); });
