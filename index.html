@@ -105,7 +105,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New job
         </button>
-        <button id="people-btn" class="icon-btn" aria-label="People and accounts" hidden>
+        <button id="people-btn" class="icon-btn" aria-label="Account" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         </button>
         <button id="bell-btn" class="icon-btn" aria-label="Notifications" aria-pressed="false">
@@ -367,9 +367,14 @@
         <div><span class="eyebrow">Accounts</span><h2 id="people-title">People</h2></div>
         <button id="people-close" class="editor-icon-btn" aria-label="Close people"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </header>
-      <p class="people-note">Everyone gets their own private jobs, notes and reminders. Nobody sees anyone else's, including you.</p>
-      <div id="people-list" class="people-list" aria-live="polite"></div>
-      <form id="person-form" class="person-form" autocomplete="off">
+      <div class="person-row account-row">
+        <span id="account-avatar" class="person-avatar"></span>
+        <div class="person-who"><strong id="account-name"></strong><span id="account-detail"></span></div>
+        <button id="sign-out" type="button">Sign out</button>
+      </div>
+      <p class="people-note admin-only">Everyone gets their own private jobs, notes and reminders. Nobody sees anyone else's, including you.</p>
+      <div id="people-list" class="people-list admin-only" aria-live="polite"></div>
+      <form id="person-form" class="person-form admin-only" autocomplete="off">
         <h3 id="person-form-title">Add a person</h3>
         <div class="person-grid">
           <label class="field"><span class="field-label">Name</span><input id="person-name" type="text" maxlength="40" placeholder="Andy" required></label>

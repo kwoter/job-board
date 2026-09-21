@@ -183,6 +183,7 @@ async function unlockApp(derived) {
     if (error && navigator.onLine) {
       // Stored key no longer matches the server: ask for the PIN fresh
       localStorage.removeItem(KEY_STORE);
+      lockEl.classList.remove('is-resuming');
       unlocked = false;
       lockBusy = false;
       dotsWrap.classList.remove('success');
@@ -212,7 +213,6 @@ function startApp() {
   lockEl.classList.add('is-open');
   setTimeout(() => { lockEl.hidden = true; }, 460);
   requestAnimationFrame(() => setActiveTab(0));
-  maybeOfferBio();
 }
 
 function greeting() {
@@ -234,7 +234,7 @@ function paintGreeting() {
 // Name and admin flag come from the server; the cached copy only keeps the greeting
 // right offline. The People panel is enforced server-side, not by this flag.
 async function loadProfile() {
-  $('#people-btn').hidden = localStorage.getItem(ADMIN_STORE) !== 'yes';
+  $('#people-btn').hidden = false;
   const { data, error } = await supabase
     .from('board_profiles')
     .select('username, display_name, is_admin, pin_length')
@@ -243,7 +243,6 @@ async function loadProfile() {
   localStorage.setItem(USER_STORE, data.username);
   localStorage.setItem(NAME_STORE, data.display_name);
   localStorage.setItem(ADMIN_STORE, data.is_admin ? 'yes' : 'no');
-  $('#people-btn').hidden = !data.is_admin;
   paintGreeting();
 }
 
@@ -304,7 +303,7 @@ $('#signin').addEventListener('submit', async (event) => {
 
 // Hand the device to someone else: this device stops getting the old person's reminders,
 // and nothing of theirs is left behind.
-$('#switch-user').addEventListener('click', async () => {
+async function signOutDevice({ reload = false } = {}) {
   if (lockBusy) return;
   if (!confirm(`Sign ${displayName() || 'this person'} out of this device?`)) return;
   lockBusy = true;
@@ -321,16 +320,25 @@ $('#switch-user').addEventListener('click', async () => {
   } catch { /* best effort: the server drops dead endpoints anyway */ }
   await supabase.auth.signOut().catch(() => {});
   [KEY_STORE, BIO_STORE, USER_STORE, PINLEN_STORE, NAME_STORE, ADMIN_STORE].forEach((k) => localStorage.removeItem(k));
+  if (reload) { location.reload(); return; }
   $('#bio-key').classList.add('is-ghost');
   pinBuffer = '';
   lockMsg.textContent = '';
   lockBusy = false;
   showSignIn(true);
-});
+}
+$('#switch-user').addEventListener('click', () => signOutDevice());
 
 async function initLock() {
   buildDots();
   showSignIn(!currentUser());
+  // Stay signed in (Louis, 21 Sep 2026): once a device has signed in it opens straight into
+  // the app. The PIN is only asked for again after Sign out or if the PIN was changed.
+  const key = localStorage.getItem(KEY_STORE);
+  if (currentUser() && key) {
+    lockEl.classList.add('is-resuming');
+    unlockApp(key);
+  }
   if (localStorage.getItem(BIO_STORE) && localStorage.getItem(KEY_STORE) && await bioAvailable()) {
     $('#bio-key').classList.remove('is-ghost');
   }
@@ -1116,7 +1124,17 @@ function setResetMode(person) {
   if (person) $('#person-pin').focus();
 }
 
-$('#people-btn').addEventListener('click', () => { peoplePanel.hidden = false; setResetMode(null); loadPeople(); });
+$('#people-btn').addEventListener('click', () => {
+  const isAdmin = localStorage.getItem(ADMIN_STORE) === 'yes';
+  $$('.admin-only', peoplePanel).forEach((el) => { el.hidden = !isAdmin; });
+  $('#people-title').textContent = isAdmin ? 'People' : 'Account';
+  $('#account-avatar').textContent = (displayName()[0] || '?').toUpperCase();
+  $('#account-name').textContent = displayName();
+  $('#account-detail').textContent = `Signed in as "${currentUser()}" on this device`;
+  peoplePanel.hidden = false;
+  if (isAdmin) { setResetMode(null); loadPeople(); }
+});
+$('#sign-out').addEventListener('click', () => signOutDevice({ reload: true }));
 $('#people-close').addEventListener('click', () => { peoplePanel.hidden = true; });
 peoplePanel.addEventListener('click', (event) => { if (event.target === peoplePanel) peoplePanel.hidden = true; });
 $('#person-cancel').addEventListener('click', () => setResetMode(null));
