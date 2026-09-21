@@ -1402,6 +1402,35 @@ body.notes-active .fab { display: none; }
   .rail-pop { width: min(236px, calc(100vw - 20px)); }
 }
 
+/* ---------- Accounts: first sign-in on a device, switch link, People panel ---------- */
+.signin { width: min(300px, 86vw); margin: 2px 0 6px; text-align: left; }
+.signin .field { margin-bottom: 12px; }
+.signin-go { width: 100%; justify-content: center; min-height: 48px; margin-top: 4px; }
+.signin-go.is-loading { opacity: .6; pointer-events: none; }
+.lock.is-signin .pin-dots, .lock.is-signin .numpad { display: none; }
+.lock-switch { margin-top: 18px; padding: 10px 14px; border: 0; background: transparent; color: var(--text-3); font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; }
+.lock-switch:hover { color: var(--text-2); }
+.people-card { width: min(560px, 100%); }
+.people-note { margin: -6px 0 16px; color: #8496B0; font-size: 12px; line-height: 1.5; }
+.people-list { display: grid; gap: 8px; margin-bottom: 20px; }
+.person-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border: 1px solid rgba(148, 163, 184, .14); border-radius: 14px; background: rgba(148, 163, 184, .045); }
+.person-avatar { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: rgba(77, 141, 255, .14); color: #9DBBFF; font-family: var(--font-display); font-size: 15px; font-weight: 700; }
+.person-who { min-width: 0; flex: 1; }
+.person-who strong { display: block; color: #E5ECF7; font-size: 13.5px; }
+.person-who span { color: #8496B0; font-size: 11.5px; }
+.person-tag { margin-left: 6px; padding: 2px 7px; border-radius: 999px; background: rgba(52, 211, 153, .14); color: #82E8C0; font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.person-row button { flex: none; min-height: 38px; padding: 0 11px; border: 1px solid rgba(148, 163, 184, .18); border-radius: 10px; background: transparent; color: #C3CEE0; font-size: 11.5px; font-weight: 650; }
+.person-row button.danger { border-color: rgba(251, 113, 133, .3); color: #FB7185; }
+.person-form { padding-top: 16px; border-top: 1px solid rgba(148, 163, 184, .13); }
+.person-form h3 { margin: 0 0 12px; font-family: var(--font-display); font-size: 15px; }
+.person-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.person-grid .field:last-child { grid-column: 1 / -1; }
+.person-grid .is-locked { opacity: .5; pointer-events: none; }
+.person-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.person-actions .is-loading { opacity: .6; pointer-events: none; }
+#person-msg { min-height: 0; margin-top: 12px; color: #C5D0E0; font-size: 12.5px; line-height: 1.5; text-align: left; }
+@media (max-width: 540px) { .person-grid { grid-template-columns: 1fr; } .person-row { flex-wrap: wrap; } }
+
 /* ---------- Animations ---------- */
 @keyframes cardIn {
   from { opacity: 0; transform: translateY(12px) scale(0.97); }

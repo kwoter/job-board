@@ -34,10 +34,19 @@
       <div class="splash-mark lock-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
       </div>
-      <p class="lock-title">Enter your PIN</p>
+      <p id="lock-title" class="lock-title">Enter your PIN</p>
       <div class="pin-dots" id="pin-dots" aria-label="PIN entry">
         <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
       </div>
+      <form id="signin" class="signin" autocomplete="off" hidden>
+        <label class="field"><span class="field-label">Your sign-in name</span>
+          <input id="signin-name" type="text" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="e.g. andy" required>
+        </label>
+        <label class="field"><span class="field-label">PIN</span>
+          <input id="signin-pin" type="password" inputmode="numeric" pattern="[0-9]*" minlength="4" maxlength="8" placeholder="••••••" required>
+        </label>
+        <button id="signin-go" class="btn-primary signin-go" type="submit">Sign in</button>
+      </form>
       <p id="lock-msg" class="lock-msg" role="alert"></p>
       <div class="numpad" id="numpad">
         <button data-key="1">1</button>
@@ -57,6 +66,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/></svg>
         </button>
       </div>
+      <button id="switch-user" class="lock-switch" type="button" hidden>Not you? Switch account</button>
     </div>
   </div>
 
@@ -94,6 +104,9 @@
         <button id="add-desktop" class="btn-primary btn-add-desktop">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New job
+        </button>
+        <button id="people-btn" class="icon-btn" aria-label="People and accounts" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         </button>
         <button id="bell-btn" class="icon-btn" aria-label="Notifications" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
@@ -345,6 +358,31 @@
   <div id="note-menu" class="note-menu" hidden>
     <button id="export-note">Export page as image</button>
     <button id="delete-note" class="danger">Delete note</button>
+  </div>
+
+  <!-- People (admin only) -->
+  <div id="people-panel" class="clean-panel" hidden>
+    <div class="clean-panel-card people-card" role="dialog" aria-modal="true" aria-labelledby="people-title">
+      <header>
+        <div><span class="eyebrow">Accounts</span><h2 id="people-title">People</h2></div>
+        <button id="people-close" class="editor-icon-btn" aria-label="Close people"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </header>
+      <p class="people-note">Everyone gets their own private jobs, notes and reminders. Nobody sees anyone else's, including you.</p>
+      <div id="people-list" class="people-list" aria-live="polite"></div>
+      <form id="person-form" class="person-form" autocomplete="off">
+        <h3 id="person-form-title">Add a person</h3>
+        <div class="person-grid">
+          <label class="field"><span class="field-label">Name</span><input id="person-name" type="text" maxlength="40" placeholder="Andy" required></label>
+          <label class="field"><span class="field-label">Sign-in name</span><input id="person-username" type="text" maxlength="24" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="andy" required></label>
+          <label class="field"><span class="field-label">PIN <em>(4 to 8 digits, 6 is best)</em></span><input id="person-pin" type="text" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" placeholder="6 digits" required></label>
+        </div>
+        <div class="person-actions">
+          <button id="person-cancel" class="btn-secondary" type="button" hidden>Cancel</button>
+          <button id="person-save" class="btn-primary" type="submit">Create account</button>
+        </div>
+        <p id="person-msg" class="ocr-status" role="alert"></p>
+      </form>
+    </div>
   </div>
 
   <!-- Add / edit sheet -->

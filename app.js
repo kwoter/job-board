@@ -4,12 +4,29 @@ import { initNotes } from './notes.js';
 const SUPABASE_URL = 'https://kmxhcvmxeoqglpshzuns.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtteGhjdm14ZW9xZ2xwc2h6dW5zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzODg0MTIsImV4cCI6MjA5NTk2NDQxMn0.-Nm_KAabbu9FQTql81blTmULPivBUnzwXa_eDN5dFao';
 const APP_SERVER_KEY = 'BJQz3w9ft1Eti87gUeqV-izXo7bwjYTCKlCIsc2CM_1XyBEElm7qiK_X8PcxoD311mTE7zeXpn6rFjmHeGlyAoc';
-// Single-user board: the Supabase password is derived from the PIN,
+// Each person's Supabase password is derived from their PIN on the device,
 // so nothing secret ships in this file. Wrong PIN = server says no.
+// Accounts are created by an admin from the People panel (board-accounts function).
 const OWNER_EMAIL = 'media@kwoter.co.uk';
+const OWNER_USERNAME = 'louis';
 const PIN_LENGTH = 4;
 const KEY_STORE = 'board-key';
 const BIO_STORE = 'board-bio';
+const USER_STORE = 'board-user';
+const PINLEN_STORE = 'board-pinlen';
+const NAME_STORE = 'board-name';
+const ADMIN_STORE = 'board-admin';
+
+const emailFor = (username) => (username === OWNER_USERNAME ? OWNER_EMAIL : `${username}@field.kwoter.co.uk`);
+// Devices set up before accounts existed have a key but no name: they are Louis's.
+const currentUser = () => localStorage.getItem(USER_STORE) || (localStorage.getItem(KEY_STORE) ? OWNER_USERNAME : null);
+const pinLength = () => Number(localStorage.getItem(PINLEN_STORE)) || PIN_LENGTH;
+const displayName = () => {
+  const saved = localStorage.getItem(NAME_STORE);
+  if (saved) return saved;
+  const user = currentUser() || '';
+  return user ? user[0].toUpperCase() + user.slice(1) : '';
+};
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
@@ -41,7 +58,7 @@ if ('serviceWorker' in navigator) {
 /* ---------- PIN lock ---------- */
 const lockEl = $('#lock');
 const dotsWrap = $('#pin-dots');
-const pinDots = $$('.pin-dot');
+let pinDots = $$('.pin-dot');
 const lockMsg = $('#lock-msg');
 const numpadEl = $('#numpad');
 
@@ -49,7 +66,19 @@ async function sha256Hex(text) {
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
-const derivePassword = (pin) => sha256Hex(`jobs-board::${pin}::kwoter`);
+// Louis keeps his original salt; everyone else is salted with their own sign-in name,
+// so two people with the same PIN still have different passwords.
+const derivePassword = (pin, username = currentUser()) =>
+  sha256Hex(`jobs-board::${pin}::${username === OWNER_USERNAME ? 'kwoter' : username}`);
+
+function buildDots() {
+  dotsWrap.replaceChildren(...Array.from({ length: pinLength() }, () => {
+    const dot = document.createElement('span');
+    dot.className = 'pin-dot';
+    return dot;
+  }));
+  pinDots = $$('.pin-dot');
+}
 
 function renderDots() {
   pinDots.forEach((d, i) => d.classList.toggle('filled', i < pinBuffer.length));
@@ -63,11 +92,11 @@ function pressKey(key) {
     return;
   }
   if (key === 'bio') { bioUnlock(); return; }
-  if (!/^[0-9]$/.test(key) || pinBuffer.length >= PIN_LENGTH) return;
+  if (!/^[0-9]$/.test(key) || pinBuffer.length >= pinLength()) return;
   lockMsg.textContent = '';
   pinBuffer += key;
   renderDots();
-  if (pinBuffer.length === PIN_LENGTH) submitPin();
+  if (pinBuffer.length === pinLength()) submitPin();
 }
 
 numpadEl.addEventListener('click', (e) => {
@@ -76,7 +105,7 @@ numpadEl.addEventListener('click', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (unlocked || lockEl.hidden) return;
+  if (unlocked || lockEl.hidden || lockEl.classList.contains('is-signin')) return;
   if (/^[0-9]$/.test(e.key)) pressKey(e.key);
   else if (e.key === 'Backspace') pressKey('back');
 });
@@ -92,7 +121,7 @@ async function submitPin() {
     // First unlock on this device: the server is the judge
     dotsWrap.classList.add('busy');
     const { error } = await supabase.auth.signInWithPassword({
-      email: OWNER_EMAIL, password: derived,
+      email: emailFor(currentUser()), password: derived,
     });
     dotsWrap.classList.remove('busy');
     if (error && !navigator.onLine) {
@@ -149,7 +178,7 @@ async function unlockApp(derived) {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) {
     const { error } = await supabase.auth.signInWithPassword({
-      email: OWNER_EMAIL, password: derived,
+      email: emailFor(currentUser()), password: derived,
     });
     if (error && navigator.onLine) {
       // Stored key no longer matches the server: ask for the PIN fresh
@@ -167,12 +196,8 @@ async function unlockApp(derived) {
 }
 
 function startApp() {
-  const g = $('#hero-greeting');
-  g.textContent = greeting();
-  const dot = document.createElement('span');
-  dot.className = 'wordmark-dot';
-  dot.textContent = '.';
-  g.appendChild(dot);
+  paintGreeting();
+  loadProfile();
   $('#hero-date').textContent = new Date().toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long',
   });
@@ -192,16 +217,41 @@ function startApp() {
 
 function greeting() {
   const h = new Date().getHours();
-  if (h < 12) return 'Good morning, Louis';
-  if (h < 18) return 'Good afternoon, Louis';
-  return 'Good evening, Louis';
+  const part = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  const name = displayName();
+  return name ? `${part}, ${name}` : part;
+}
+
+function paintGreeting() {
+  const g = $('#hero-greeting');
+  g.textContent = greeting();
+  const dot = document.createElement('span');
+  dot.className = 'wordmark-dot';
+  dot.textContent = '.';
+  g.appendChild(dot);
+}
+
+// Name and admin flag come from the server; the cached copy only keeps the greeting
+// right offline. The People panel is enforced server-side, not by this flag.
+async function loadProfile() {
+  $('#people-btn').hidden = localStorage.getItem(ADMIN_STORE) !== 'yes';
+  const { data, error } = await supabase
+    .from('board_profiles')
+    .select('username, display_name, is_admin, pin_length')
+    .maybeSingle();
+  if (error || !data) return;
+  localStorage.setItem(USER_STORE, data.username);
+  localStorage.setItem(NAME_STORE, data.display_name);
+  localStorage.setItem(ADMIN_STORE, data.is_admin ? 'yes' : 'no');
+  $('#people-btn').hidden = !data.is_admin;
+  paintGreeting();
 }
 
 // If the session ever drops mid-use, quietly sign back in with the device key.
 supabase.auth.onAuthStateChange((_event, session) => {
   if (!session && unlocked) {
     const key = localStorage.getItem(KEY_STORE);
-    if (key) supabase.auth.signInWithPassword({ email: OWNER_EMAIL, password: key });
+    if (key) supabase.auth.signInWithPassword({ email: emailFor(currentUser()), password: key });
   }
 });
 
@@ -216,7 +266,71 @@ async function bioAvailable() {
   } catch { return false; }
 }
 
+function showSignIn(show) {
+  lockEl.classList.toggle('is-signin', show);
+  $('#signin').hidden = !show;
+  $('#switch-user').hidden = show;
+  $('#lock-title').textContent = show ? 'Sign in' : (displayName() ? `Hello ${displayName()}, enter your PIN` : 'Enter your PIN');
+  if (show) setTimeout(() => $('#signin-name').focus(), 60);
+}
+
+$('#signin').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (lockBusy) return;
+  const username = $('#signin-name').value.trim().toLowerCase();
+  const pin = $('#signin-pin').value.trim();
+  if (!/^[a-z0-9][a-z0-9._-]{1,23}$/.test(username)) { lockMsg.textContent = 'Use the sign-in name you were given, e.g. andy.'; return; }
+  if (!/^[0-9]{4,8}$/.test(pin)) { lockMsg.textContent = 'Your PIN is 4 to 8 digits.'; return; }
+  lockBusy = true;
+  lockMsg.textContent = '';
+  $('#signin-go').classList.add('is-loading');
+  const derived = await derivePassword(pin, username);
+  const { error } = await supabase.auth.signInWithPassword({ email: emailFor(username), password: derived });
+  $('#signin-go').classList.remove('is-loading');
+  if (error) {
+    lockBusy = false;
+    lockMsg.textContent = navigator.onLine ? 'That name and PIN do not match.' : 'You are offline. Connect once to sign in.';
+    $('#signin-pin').value = '';
+    return;
+  }
+  localStorage.setItem(USER_STORE, username);
+  localStorage.setItem(KEY_STORE, derived);
+  localStorage.setItem(PINLEN_STORE, String(pin.length));
+  localStorage.removeItem(NAME_STORE);
+  localStorage.removeItem(ADMIN_STORE);
+  $('#signin-pin').value = '';
+  unlockApp(derived);
+});
+
+// Hand the device to someone else: this device stops getting the old person's reminders,
+// and nothing of theirs is left behind.
+$('#switch-user').addEventListener('click', async () => {
+  if (lockBusy) return;
+  if (!confirm(`Sign ${displayName() || 'this person'} out of this device?`)) return;
+  lockBusy = true;
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    const sub = await reg?.pushManager?.getSubscription();
+    if (sub) {
+      const key = localStorage.getItem(KEY_STORE);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session && key) await supabase.auth.signInWithPassword({ email: emailFor(currentUser()), password: key });
+      await supabase.from('board_push_subscriptions').delete().eq('endpoint', sub.endpoint);
+      await sub.unsubscribe();
+    }
+  } catch { /* best effort: the server drops dead endpoints anyway */ }
+  await supabase.auth.signOut().catch(() => {});
+  [KEY_STORE, BIO_STORE, USER_STORE, PINLEN_STORE, NAME_STORE, ADMIN_STORE].forEach((k) => localStorage.removeItem(k));
+  $('#bio-key').classList.add('is-ghost');
+  pinBuffer = '';
+  lockMsg.textContent = '';
+  lockBusy = false;
+  showSignIn(true);
+});
+
 async function initLock() {
+  buildDots();
+  showSignIn(!currentUser());
   if (localStorage.getItem(BIO_STORE) && localStorage.getItem(KEY_STORE) && await bioAvailable()) {
     $('#bio-key').classList.remove('is-ghost');
   }
@@ -259,8 +373,8 @@ $('#bio-enable').addEventListener('click', async () => {
         rp: { name: 'Jobs Board', id: location.hostname },
         user: {
           id: crypto.getRandomValues(new Uint8Array(16)),
-          name: 'louis',
-          displayName: 'Louis',
+          name: currentUser() || 'field',
+          displayName: displayName() || 'Field',
         },
         pubKeyCredParams: [
           { type: 'public-key', alg: -7 },
@@ -919,6 +1033,128 @@ bellBtn.addEventListener('click', async () => {
   } catch (err) {
     console.error(err);
     toast('Could not enable notifications');
+  }
+});
+
+/* ---------- People (admin only; the server checks, this is just the screen) ---------- */
+const peoplePanel = $('#people-panel');
+const personMsg = $('#person-msg');
+let resetTarget = null;
+
+async function accounts(body) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/board-accounts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON, Authorization: `Bearer ${session?.access_token || ''}` },
+    body: JSON.stringify(body),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || out.message || 'Something went wrong');
+  return out;
+}
+
+function personRow(person, me) {
+  const row = document.createElement('div');
+  row.className = 'person-row';
+  const avatar = document.createElement('span');
+  avatar.className = 'person-avatar';
+  avatar.textContent = (person.display_name[0] || '?').toUpperCase();
+  const who = document.createElement('div');
+  who.className = 'person-who';
+  const name = document.createElement('strong');
+  name.textContent = person.display_name;
+  if (person.user_id === me || person.is_admin) {
+    const tag = document.createElement('span');
+    tag.className = 'person-tag';
+    tag.textContent = person.user_id === me ? 'You' : 'Admin';
+    name.append(tag);
+  }
+  const detail = document.createElement('span');
+  detail.textContent = `Signs in as "${person.username}" · ${person.pin_length}-digit PIN`;
+  who.append(name, detail);
+  row.append(avatar, who);
+  if (person.user_id !== me && !person.is_admin) {
+    const pin = document.createElement('button');
+    pin.type = 'button';
+    pin.textContent = 'New PIN';
+    pin.addEventListener('click', () => setResetMode(person));
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'danger';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', async () => {
+      if (!confirm(`Remove ${person.display_name}? This deletes ALL of their jobs and notes for good.`)) return;
+      try { await accounts({ action: 'remove', user_id: person.user_id }); toast(`${person.display_name} removed`); loadPeople(); }
+      catch (err) { personMsg.textContent = err.message; }
+    });
+    row.append(pin, remove);
+  }
+  return row;
+}
+
+async function loadPeople() {
+  const list = $('#people-list');
+  try {
+    const { people, me } = await accounts({ action: 'list' });
+    list.replaceChildren(...people.map((person) => personRow(person, me)));
+  } catch (err) {
+    list.textContent = err.message;
+  }
+}
+
+function setResetMode(person) {
+  resetTarget = person;
+  $('#person-form-title').textContent = person ? `New PIN for ${person.display_name}` : 'Add a person';
+  $('#person-save').textContent = person ? 'Save new PIN' : 'Create account';
+  $('#person-cancel').hidden = !person;
+  $('#person-name').value = person ? person.display_name : '';
+  $('#person-username').value = person ? person.username : '';
+  $('#person-username').dataset.touched = person ? 'yes' : '';
+  [$('#person-name'), $('#person-username')].forEach((input) => input.closest('.field').classList.toggle('is-locked', !!person));
+  $('#person-pin').value = '';
+  personMsg.textContent = '';
+  if (person) $('#person-pin').focus();
+}
+
+$('#people-btn').addEventListener('click', () => { peoplePanel.hidden = false; setResetMode(null); loadPeople(); });
+$('#people-close').addEventListener('click', () => { peoplePanel.hidden = true; });
+peoplePanel.addEventListener('click', (event) => { if (event.target === peoplePanel) peoplePanel.hidden = true; });
+$('#person-cancel').addEventListener('click', () => setResetMode(null));
+$('#person-username').addEventListener('input', (event) => { event.target.dataset.touched = 'yes'; });
+$('#person-name').addEventListener('input', (event) => {
+  const field = $('#person-username');
+  if (field.dataset.touched === 'yes') return;
+  field.value = event.target.value.trim().toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9._-]/g, '').slice(0, 24);
+});
+
+$('#person-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const name = $('#person-name').value.trim();
+  const username = $('#person-username').value.trim().toLowerCase();
+  const pin = $('#person-pin').value.trim();
+  if (!/^[a-z0-9][a-z0-9._-]{1,23}$/.test(username)) { personMsg.textContent = 'Sign-in name: 2 to 24 letters or numbers, no spaces.'; return; }
+  if (!/^[0-9]{4,8}$/.test(pin)) { personMsg.textContent = 'The PIN must be 4 to 8 digits.'; return; }
+  const save = $('#person-save');
+  save.classList.add('is-loading');
+  personMsg.textContent = '';
+  try {
+    const password = await derivePassword(pin, username);
+    if (resetTarget) {
+      await accounts({ action: 'reset_pin', user_id: resetTarget.user_id, password, pin_length: pin.length });
+      const who = resetTarget.display_name;
+      setResetMode(null);
+      personMsg.textContent = `Done. On ${who}'s device: tap "Not you? Switch account" on the PIN screen, then sign in with the new PIN.`;
+    } else {
+      await accounts({ action: 'create', display_name: name, username, password, pin_length: pin.length });
+      setResetMode(null);
+      personMsg.textContent = `Done. ${name} opens kwoter.github.io/job-board and signs in as "${username}" with that PIN.`;
+      toast(`${name}'s account is ready`);
+    }
+    loadPeople();
+  } catch (err) {
+    personMsg.textContent = err.message;
+  } finally {
+    save.classList.remove('is-loading');
   }
 });
 
