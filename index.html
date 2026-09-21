@@ -245,40 +245,21 @@
             <svg viewBox="0 0 26 26" fill="none"><path d="m5.5 16.5 9-10a2 2 0 0 1 2.8-.2l3.3 3a2 2 0 0 1 .2 2.8L13.7 20H8l-2.5-2.2a1 1 0 0 1 0-1.3Z" stroke="currentColor" stroke-width="1.7"/><path d="m11 10.5 6.4 5.8M8 20h12" stroke="currentColor" stroke-width="1.7"/></svg><span>Erase</span>
           </button>
         </div>
+        <div class="rail-divider"></div>
+        <div class="rail-controls">
+          <button id="rail-colour" class="rail-chip" type="button" data-pop="pop-colour" aria-haspopup="dialog" aria-expanded="false" title="Ink colour" aria-label="Ink colour">
+            <i id="chip-swatch" class="chip-swatch"></i><span>Colour</span>
+          </button>
+          <div id="quick-colours" class="quick-colours" aria-label="Recent colours"></div>
+          <button id="rail-size" class="rail-chip" type="button" data-pop="pop-size" aria-haspopup="dialog" aria-expanded="false" title="Stroke size" aria-label="Stroke size">
+            <i class="chip-size"><b id="chip-size-dot"></b></i><span>Size</span>
+          </button>
           <button id="shape-snap" class="ink-toggle is-active" type="button" title="Tidy shapes" aria-label="Tidy shapes when finished" aria-pressed="true">
             <svg viewBox="0 0 26 26" fill="none"><circle cx="9" cy="9" r="5" stroke="currentColor" stroke-width="1.7"/><rect x="12" y="12" width="9.5" height="9.5" rx="1.4" stroke="currentColor" stroke-width="1.7"/></svg><span>Tidy</span>
           </button>
-        <div class="rail-divider"></div>
-        <div id="ink-colors" class="ink-colors" aria-label="Ink colour">
-          <button class="ink-color is-active" data-color="#162034" style="--swatch:#162034" aria-label="Midnight ink"></button>
-          <button class="ink-color" data-color="#F3F4F6" style="--swatch:#F3F4F6" aria-label="White ink"></button>
-          <button class="ink-color" data-color="#2563EB" style="--swatch:#2563EB" aria-label="Blue ink"></button>
-          <button class="ink-color" data-color="#E3485C" style="--swatch:#E3485C" aria-label="Red ink"></button>
-          <button class="ink-color" data-color="#138A68" style="--swatch:#138A68" aria-label="Green ink"></button>
-          <button class="ink-color" data-color="#F3C84B" style="--swatch:#F3C84B" aria-label="Yellow ink"></button>
-          <button class="ink-color" data-color="#F2822C" style="--swatch:#F2822C" aria-label="Orange ink"></button>
-          <button class="ink-color" data-color="#8B5CF6" style="--swatch:#8B5CF6" aria-label="Purple ink"></button>
-          <button class="ink-color" data-color="#EC4899" style="--swatch:#EC4899" aria-label="Pink ink"></button>
-          <button class="ink-color" data-color="#06B6D4" style="--swatch:#06B6D4" aria-label="Cyan ink"></button>
-          <button class="ink-color" data-color="#7C5A3A" style="--swatch:#7C5A3A" aria-label="Brown ink"></button>
-          <button class="ink-color" data-color="#64748B" style="--swatch:#64748B" aria-label="Slate ink"></button>
-          <label class="ink-wheel" title="Any colour" aria-label="Any colour">
-            <input id="ink-wheel" type="color" value="#2563EB">
-          </label>
-        </div>
-        <label class="size-control" title="Stroke size">
-          <span class="size-dot size-dot-small"></span>
-          <input id="ink-size" type="range" min="1" max="18" value="4" aria-label="Stroke size">
-          <span class="size-dot size-dot-large"></span>
-        </label>
-        <div class="page-style-picker" aria-label="Paper style">
-          <button class="paper-style is-active" data-paper="dot" aria-label="Dotted paper">••</button>
-          <button class="paper-style" data-paper="ruled" aria-label="Ruled paper">☰</button>
-          <button class="paper-style" data-paper="plain" aria-label="Plain paper">□</button>
-        </div>
-        <div class="paper-theme-picker" aria-label="Paper colour">
-          <button class="paper-theme is-active" data-theme="light" aria-label="White paper" title="White paper">☀</button>
-          <button class="paper-theme" data-theme="dark" aria-label="Black paper" title="Black paper">☾</button>
+          <button id="rail-page" class="rail-chip" type="button" data-pop="pop-page" aria-haspopup="dialog" aria-expanded="false" title="Paper" aria-label="Paper options">
+            <svg viewBox="0 0 26 26" fill="none"><path d="M7 3.5h8.5L20 8v13.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-17a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M15 3.5V8.5h5M9.5 13h7M9.5 17h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Page</span>
+          </button>
         </div>
       </aside>
 
@@ -292,6 +273,55 @@
           <button id="zoom-in" aria-label="Zoom in">＋</button>
         </div>
       </main>
+    </div>
+
+    <div id="pop-colour" class="rail-pop" role="dialog" aria-label="Ink colour" hidden>
+      <div class="pop-title">Colour</div>
+      <div id="ink-colors" class="ink-colors">
+        <button class="ink-color is-active" type="button" data-color="#162034" style="--swatch:#162034" aria-label="Midnight ink"></button>
+        <button class="ink-color" type="button" data-color="#F3F4F6" style="--swatch:#F3F4F6" aria-label="White ink"></button>
+        <button class="ink-color" type="button" data-color="#2563EB" style="--swatch:#2563EB" aria-label="Blue ink"></button>
+        <button class="ink-color" type="button" data-color="#E3485C" style="--swatch:#E3485C" aria-label="Red ink"></button>
+        <button class="ink-color" type="button" data-color="#138A68" style="--swatch:#138A68" aria-label="Green ink"></button>
+        <button class="ink-color" type="button" data-color="#F3C84B" style="--swatch:#F3C84B" aria-label="Yellow ink"></button>
+        <button class="ink-color" type="button" data-color="#F2822C" style="--swatch:#F2822C" aria-label="Orange ink"></button>
+        <button class="ink-color" type="button" data-color="#8B5CF6" style="--swatch:#8B5CF6" aria-label="Purple ink"></button>
+        <button class="ink-color" type="button" data-color="#EC4899" style="--swatch:#EC4899" aria-label="Pink ink"></button>
+        <button class="ink-color" type="button" data-color="#06B6D4" style="--swatch:#06B6D4" aria-label="Cyan ink"></button>
+        <button class="ink-color" type="button" data-color="#7C5A3A" style="--swatch:#7C5A3A" aria-label="Brown ink"></button>
+        <button class="ink-color" type="button" data-color="#64748B" style="--swatch:#64748B" aria-label="Slate ink"></button>
+      </div>
+      <label class="ink-wheel" title="Any colour">
+        <i class="ink-wheel-dot"></i><span>Any colour</span>
+        <input id="ink-wheel" type="color" value="#2563EB" aria-label="Pick any colour">
+      </label>
+    </div>
+
+    <div id="pop-size" class="rail-pop" role="dialog" aria-label="Stroke size" hidden>
+      <div class="pop-title">Stroke size <output id="size-readout" for="ink-size">4</output></div>
+      <div class="size-preview"><i id="size-preview-dot"></i></div>
+      <input id="ink-size" class="size-slider" type="range" min="1" max="18" value="4" aria-label="Stroke size">
+      <div class="size-presets" aria-label="Quick sizes">
+        <button type="button" class="size-preset" data-size="2" aria-label="Fine"><i style="--d:4px"></i></button>
+        <button type="button" class="size-preset" data-size="4" aria-label="Normal"><i style="--d:7px"></i></button>
+        <button type="button" class="size-preset" data-size="7" aria-label="Medium"><i style="--d:11px"></i></button>
+        <button type="button" class="size-preset" data-size="11" aria-label="Bold"><i style="--d:15px"></i></button>
+        <button type="button" class="size-preset" data-size="16" aria-label="Heavy"><i style="--d:20px"></i></button>
+      </div>
+    </div>
+
+    <div id="pop-page" class="rail-pop" role="dialog" aria-label="Paper options" hidden>
+      <div class="pop-title">Paper</div>
+      <div class="page-style-picker" aria-label="Paper style">
+        <button class="paper-style is-active" type="button" data-paper="dot"><i class="paper-swatch paper-swatch-dot"></i>Dots</button>
+        <button class="paper-style" type="button" data-paper="ruled"><i class="paper-swatch paper-swatch-ruled"></i>Lines</button>
+        <button class="paper-style" type="button" data-paper="plain"><i class="paper-swatch paper-swatch-plain"></i>Plain</button>
+      </div>
+      <div class="pop-title">Paper colour</div>
+      <div class="paper-theme-picker" aria-label="Paper colour">
+        <button class="paper-theme is-active" type="button" data-theme="light"><i class="paper-swatch paper-swatch-light"></i>White</button>
+        <button class="paper-theme" type="button" data-theme="dark"><i class="paper-swatch paper-swatch-dark"></i>Black</button>
+      </div>
     </div>
   </div>
 

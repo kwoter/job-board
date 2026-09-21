@@ -51,6 +51,9 @@ export function initNotes({ supabase, toast }) {
   let inkStamp = 0;
   let paperKey = '';
   let shapeSnap = localStorage.getItem('field-shape-snap') !== 'off';
+  let toolSizes = readStored('field-tool-sizes', {});
+  let recentColours = readStored('field-recent-colours', []);
+  let openPop = null;
   let penDown = false;
   let lastPenAt = 0;
   let penSeen = false;
@@ -274,6 +277,7 @@ export function initNotes({ supabase, toast }) {
     currentStroke = null;
     editor.hidden = true;
     $('#note-menu').hidden = true;
+    closePops();
     document.body.style.overflow = '';
     await loadNotes();
   }
@@ -1369,6 +1373,87 @@ export function initNotes({ supabase, toast }) {
       button.setAttribute('aria-checked', String(selected));
     });
     if (tool === 'highlighter' && colour === '#162034') selectColour('#F3C84B');
+    setSize(toolSizes[tool] || 4, false);
+    $('#rail-colour')?.classList.toggle('is-muted', tool === 'eraser');
+    $('#rail-size')?.classList.toggle('is-muted', tool === 'fill');
+  }
+
+  function readStored(key, fallback) {
+    try {
+      const value = JSON.parse(localStorage.getItem(key));
+      return value && typeof value === 'object' ? value : fallback;
+    } catch { return fallback; }
+  }
+
+  // One size per tool, so a fat highlighter does not make the next pen stroke fat too.
+  function setSize(next, remember = true) {
+    size = clamp(Math.round(Number(next) || 4), 1, 18);
+    if (remember) {
+      toolSizes[tool] = size;
+      localStorage.setItem('field-tool-sizes', JSON.stringify(toolSizes));
+    }
+    const slider = $('#ink-size');
+    if (slider && Number(slider.value) !== size) slider.value = String(size);
+    const readout = $('#size-readout');
+    if (readout) readout.textContent = String(size);
+    const width = size * (toolPreset[tool] || toolPreset.fountain).width;
+    $('#size-preview-dot')?.style.setProperty('--d', `${clamp(width, 2, 60)}px`);
+    $('#chip-size-dot')?.style.setProperty('--d', `${clamp(3 + size * .8, 3, 17)}px`);
+    $$('.size-preset').forEach((button) => button.classList.toggle('is-active', Number(button.dataset.size) === size));
+  }
+
+  function rememberColour(value) {
+    const key = value.toUpperCase();
+    recentColours = [key, ...recentColours.filter((entry) => entry !== key)].slice(0, 4);
+    localStorage.setItem('field-recent-colours', JSON.stringify(recentColours));
+    renderQuickColours();
+  }
+
+  // The rail shows the last three colours used that are not the current one: one tap to swap back.
+  function renderQuickColours() {
+    const holder = $('#quick-colours');
+    if (!holder) return;
+    holder.replaceChildren(...recentColours
+      .filter((entry) => entry !== colour.toUpperCase())
+      .slice(0, 3)
+      .map((entry) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'quick-colour';
+        button.style.setProperty('--swatch', entry);
+        button.setAttribute('aria-label', `Switch to recent colour ${entry}`);
+        button.append(document.createElement('i'));
+        button.addEventListener('click', () => { selectColour(entry); rememberColour(entry); });
+        return button;
+      }));
+  }
+
+  function closePops() {
+    if (!openPop) return;
+    openPop.hidden = true;
+    $$('.rail-chip[data-pop]').forEach((chip) => chip.setAttribute('aria-expanded', 'false'));
+    openPop = null;
+  }
+
+  // Pop-outs sit beside the rail (landscape) or above it (portrait) and are clamped to the screen.
+  function togglePop(chip) {
+    const pop = document.getElementById(chip.dataset.pop);
+    const wasOpen = openPop === pop;
+    closePops();
+    if (wasOpen || !pop) return;
+    pop.hidden = false;
+    const rail = chip.closest('.instrument-rail');
+    const sideways = getComputedStyle(rail).flexDirection === 'column';
+    const anchor = chip.getBoundingClientRect();
+    const box = { width: pop.offsetWidth, height: pop.offsetHeight }; // offset*, not the rect: the open animation scales it
+    const head = $('.note-editor-head').getBoundingClientRect().bottom;
+    const gap = 12;
+    const left = sideways ? rail.getBoundingClientRect().right + gap : anchor.left + anchor.width / 2 - box.width / 2;
+    const top = sideways ? anchor.top + anchor.height / 2 - box.height / 2 : rail.getBoundingClientRect().top - box.height - gap;
+    pop.style.left = `${clamp(left, 10, window.innerWidth - box.width - 10)}px`;
+    pop.style.top = `${clamp(top, head + 10, window.innerHeight - box.height - 10)}px`;
+    chip.setAttribute('aria-expanded', 'true');
+    openPop = pop;
   }
 
   function selectColour(next) {
@@ -1384,6 +1469,8 @@ export function initNotes({ supabase, toast }) {
       if (/^#[0-9a-f]{6}$/i.test(colour)) wheel.value = colour;
       wheel.closest('.ink-wheel')?.classList.toggle('is-active', !matched);
     }
+    editor.style.setProperty('--chip', colour);
+    renderQuickColours();
   }
 
   function setPaper(style, save = true) {
@@ -1408,6 +1495,7 @@ export function initNotes({ supabase, toast }) {
 
   function applyPaperClass() {
     paper.className = `paper paper-${active?.page_style || 'dot'} paper-theme-${paperTheme}`;
+    editor.dataset.paper = paperTheme;
   }
 
   function renderPage(density = 1) {
@@ -1654,8 +1742,16 @@ export function initNotes({ supabase, toast }) {
   new ResizeObserver(resizeCanvas).observe(paper);
 
   $$('.ink-tool[data-tool]').forEach((button) => button.addEventListener('click', () => setTool(button.dataset.tool)));
-  $$('.ink-color').forEach((button) => button.addEventListener('click', () => selectColour(button.dataset.color)));
+  $$('.ink-color').forEach((button) => button.addEventListener('click', () => {
+    selectColour(button.dataset.color);
+    rememberColour(button.dataset.color);
+    closePops();
+  }));
   $('#ink-wheel').addEventListener('input', (event) => selectColour(event.target.value));
+  $('#ink-wheel').addEventListener('change', (event) => rememberColour(event.target.value));
+  $$('.rail-chip[data-pop]').forEach((chip) => chip.addEventListener('click', () => togglePop(chip)));
+  $$('.size-preset').forEach((button) => button.addEventListener('click', () => setSize(button.dataset.size)));
+  window.addEventListener('resize', closePops);
   $('#shape-snap').addEventListener('click', () => {
     setShapeSnap(!shapeSnap);
     toast(shapeSnap ? 'Shapes will be tidied up' : 'Shapes left as drawn');
@@ -1663,7 +1759,9 @@ export function initNotes({ supabase, toast }) {
   setShapeSnap(shapeSnap);
   $$('.paper-style').forEach((button) => button.addEventListener('click', () => setPaper(button.dataset.paper)));
   $$('.paper-theme').forEach((button) => button.addEventListener('click', () => setPaperTheme(button.dataset.theme)));
-  $('#ink-size').addEventListener('input', (event) => { size = Number(event.target.value); });
+  $('#ink-size').addEventListener('input', (event) => setSize(event.target.value));
+  selectColour(colour);
+  setSize(toolSizes[tool] || 4, false);
   $('#note-title').addEventListener('input', scheduleSave);
   $('#note-back').addEventListener('click', closeNote);
   $('#note-undo').addEventListener('click', undo);
@@ -1693,9 +1791,11 @@ export function initNotes({ supabase, toast }) {
   document.addEventListener('pointerdown', (event) => {
     const menu = $('#note-menu');
     if (!menu.hidden && !menu.contains(event.target) && !$('#note-more').contains(event.target)) menu.hidden = true;
-  });
+    if (openPop && !openPop.contains(event.target) && !event.target.closest?.('.rail-chip[data-pop]')) closePops();
+  }, true);
   document.addEventListener('keydown', (event) => {
-    if (editor.hidden || event.target.matches('input, textarea')) return;
+    if (event.key === 'Escape' && openPop) { closePops(); return; }
+    if (editor.hidden || event.target.matches?.('input, textarea')) return;
     if (event.code === 'Space') {
       spaceHeld = true;
       event.preventDefault();
