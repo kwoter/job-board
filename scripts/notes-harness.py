@@ -6,13 +6,25 @@ SRC = pathlib.Path(__file__).resolve().parent.parent
 BOOT = """<style>#lock,.lock,#lock-screen,.lock-screen{display:none!important}</style>
 <script type="module">
 import { initNotes } from './notes.js';
+const records = JSON.parse(sessionStorage.getItem('notes-harness-records') || '[]');
+window.__notesRecords = records;
 const ok = Promise.resolve({ data: [], error: null });
-const q = { select(){return q}, order(){return ok}, insert(){return ok}, upsert(){return ok}, delete(){return q}, eq(){return ok}, then(r){return ok.then(r)} };
+const persist = (record) => {
+  const index = records.findIndex((item) => item.id === record.id);
+  if (index < 0) records.push(structuredClone(record)); else records[index] = structuredClone(record);
+  sessionStorage.setItem('notes-harness-records', JSON.stringify(records));
+  return ok;
+};
+const q = { select(){return q}, order(){return Promise.resolve({data: structuredClone(records), error: null})}, insert: persist, upsert: persist, delete(){return q}, eq(){return ok}, then(r){return ok.then(r)} };
 const supabase = { from(){return q}, auth:{ getUser: async()=>({data:{user:{id:'u'}}}) }, channel(){ const c={on(){return c}, subscribe(){return c}}; return c; }, removeChannel(){} };
 window.__toasts = [];
 initNotes({ supabase, toast: (m) => window.__toasts.push(m) });
+document.getElementById('app-view').hidden = false;
 document.querySelectorAll('.app-screen').forEach((el) => { el.hidden = el.id !== 'notes-screen'; });
-setTimeout(() => document.getElementById('new-note').click(), 150);
+setTimeout(() => {
+  if (!records.length) document.getElementById('new-note').click();
+  else document.querySelector('.app-switch[data-screen="notes"]').click();
+}, 150);
 </script>"""
 class H(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):

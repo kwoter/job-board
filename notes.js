@@ -1,5 +1,7 @@
-const DRAWING_VERSION = 3;
-const DEFAULT_DRAWING = () => ({ version: DRAWING_VERSION, strokes: [], view: { x: 0, y: 0, zoom: 1 }, theme: 'light', job_ids: [] });
+import { loadPicture, preparePicture, paintPictures, MAX_PICTURE_DATA } from './note-pictures.js';
+
+const DRAWING_VERSION = 4;
+const DEFAULT_DRAWING = () => ({ version: DRAWING_VERSION, strokes: [], pictures: [], view: { x: 0, y: 0, zoom: 1 }, theme: 'light', job_ids: [] });
 const MIN_ZOOM = .05;
 const MAX_ZOOM = 8;
 
@@ -21,6 +23,11 @@ export function initNotes({ supabase, toast }) {
   let active = null;
   let strokes = [];
   let redoStack = [];
+  let undoStack = [];
+  let pictures = [];
+  let selectedPicture = null;
+  let pictureGesture = null;
+  let addingPictures = false;
   let currentStroke = null;
   let tool = 'fountain';
   let colour = '#162034';
@@ -159,6 +166,9 @@ export function initNotes({ supabase, toast }) {
       copy.version = 2;
     }
     copy.view ||= { x: 0, y: 0, zoom: 1 };
+    copy.pictures = Array.isArray(copy.pictures) ? copy.pictures.filter((picture) =>
+      picture && typeof picture.src === 'string' && [picture.x, picture.y, picture.width, picture.height].every(Number.isFinite)
+      && picture.width > 0 && picture.height > 0) : [];
     copy.theme = copy.theme === 'dark' ? 'dark' : 'light';
     copy.strokes = (copy.strokes || []).flatMap((stroke) => (
       stroke.tool === 'scratch-erase' ? (stroke.removed || []) : [stroke]
@@ -213,7 +223,7 @@ export function initNotes({ supabase, toast }) {
       title.textContent = note.title || 'Untitled note';
       const updated = document.createElement('span');
       const strokeCount = migrateDrawing(drawingFor(note)).strokes.filter((stroke) => stroke.tool !== 'eraser').length;
-      updated.textContent = `${strokeCount} strokes · ${relativeDate(note.updated_at)}`;
+      updated.textContent = `${strokeCount} strokes${drawing.pictures.length ? ` · ${drawing.pictures.length} pictures` : ''} · ${relativeDate(note.updated_at)}`;
       meta.append(title, updated);
       card.append(preview, meta);
       card.addEventListener('click', () => openNote(note));
@@ -249,6 +259,11 @@ export function initNotes({ supabase, toast }) {
     active = structuredClone(note);
     const drawing = migrateDrawing(drawingFor(note));
     strokes = drawing.strokes;
+    pictures = drawing.pictures;
+    selectedPicture = null;
+    pictureGesture = null;
+    undoStack = [];
+    Promise.allSettled(pictures.map(loadPicture)).then(() => { if (active?.id === note.id) redraw(); });
     inkStamp++;
     camera = {
       x: Number(drawing.view?.x) || 0,
@@ -258,6 +273,7 @@ export function initNotes({ supabase, toast }) {
     paperTheme = drawing.theme;
     linkedJobIds = drawing.job_ids;
     redoStack = [];
+    updatePictureControls();
     $('#note-title').value = active.title || 'Untitled note';
     $('#clean-text').value = active.clean_text || '';
     setPaper(active.page_style || 'dot', false);
@@ -271,6 +287,7 @@ export function initNotes({ supabase, toast }) {
   }
 
   async function closeNote() {
+    if (pictureGesture) finishPictureGesture();
     clearTimeout(saveTimer);
     if (active) await saveActive();
     active = null;
@@ -298,11 +315,11 @@ export function initNotes({ supabase, toast }) {
   async function saveActive() {
     if (!active) return;
     active.title = $('#note-title').value.trim() || 'Untitled note';
-    active.drawing = { version: DRAWING_VERSION, strokes, view: camera, theme: paperTheme, job_ids: linkedJobIds };
+    active.drawing = { version: DRAWING_VERSION, strokes, pictures, view: camera, theme: paperTheme, job_ids: linkedJobIds };
     active.clean_text = $('#clean-text').value;
     active.updated_at = new Date().toISOString();
-    saveLocal(active);
-    const record = {
+    const locallySaved = saveLocal(active);
+    const record = structuredClone({
       id: active.id,
       user_id: active.user_id,
       title: active.title,
@@ -311,16 +328,18 @@ export function initNotes({ supabase, toast }) {
       page_style: active.page_style || 'dot',
       created_at: active.created_at,
       updated_at: active.updated_at,
-    };
+    });
     const { error } = await supabase.from('board_notes').upsert(record);
     if (error) {
-      setSaveState('error', 'On device');
+      if (active?.id === record.id) setSaveState('error', locallySaved ? 'On device' : 'Not saved — retry');
+      if (!locallySaved) toast('Could not save this page. Keep it open and try again when connected.');
       return;
     }
+    if (active?.id !== record.id || active.updated_at !== record.updated_at) return;
     setSaveState('', 'Saved');
-    const index = notes.findIndex((note) => note.id === active.id);
-    if (index >= 0) notes[index] = structuredClone(active);
-    else notes.unshift(structuredClone(active));
+    const index = notes.findIndex((note) => note.id === record.id);
+    if (index >= 0) notes[index] = record;
+    else notes.unshift(record);
     writeLocalIndex(notes);
   }
 
@@ -331,11 +350,145 @@ export function initNotes({ supabase, toast }) {
       if (index >= 0) notes[index] = structuredClone(note);
       else notes.unshift(structuredClone(note));
       writeLocalIndex(notes);
-    } catch { /* cloud save will still be attempted */ }
+      return true;
+    } catch { return false; /* cloud save will still be attempted */ }
   }
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
+  }
+
+  function editSnapshot() {
+    return { strokes: [...strokes], pictures: pictures.map((picture) => ({ ...picture })) };
+  }
+
+  function rememberEdit(snapshot = editSnapshot()) {
+    undoStack.push(snapshot);
+    if (undoStack.length > 100) undoStack.shift();
+    redoStack = [];
+  }
+
+  function restoreEdit(snapshot) {
+    strokes = [...snapshot.strokes];
+    pictures = snapshot.pictures.map((picture) => ({ ...picture }));
+    selectedPicture = null;
+    updatePictureControls();
+  }
+
+  function updatePictureControls() {
+    $('#picture-controls').hidden = tool !== 'image';
+    const selected = pictures.find((picture) => picture.id === selectedPicture);
+    $('#picture-hint').textContent = selected ? 'Drag to move · drag the corner to resize' : 'Tap a picture to move or resize it';
+    ['#picture-smaller', '#picture-larger', '#picture-remove'].forEach((selector) => { $(selector).disabled = !selected; });
+    canvas.style.cursor = tool === 'image' ? 'grab' : 'crosshair';
+  }
+
+  async function addPictures(files, position = null) {
+    if (!active || addingPictures) return;
+    const noteId = active.id;
+    addingPictures = true;
+    $('#note-add-image').disabled = true;
+    let added = 0;
+    try {
+      for (const file of files) {
+        if (active?.id !== noteId) break;
+        try {
+          const picture = await preparePicture(file);
+          if (active?.id !== noteId) break;
+          if (pictures.reduce((total, item) => total + item.src.length, picture.src.length) > MAX_PICTURE_DATA) {
+            toast('This page has lots of pictures. Start a new page or remove one first.');
+            break;
+          }
+          const rect = canvas.getBoundingClientRect();
+          const scale = Math.min(1, rect.width * .55 / (picture.width * camera.zoom), rect.height * .55 / (picture.height * camera.zoom));
+          picture.width *= scale;
+          picture.height *= scale;
+          picture.x = (position?.x ?? camera.x + rect.width / (2 * camera.zoom)) - picture.width / 2 + added * 24 / camera.zoom;
+          picture.y = (position?.y ?? camera.y + rect.height / (2 * camera.zoom)) - picture.height / 2 + added * 24 / camera.zoom;
+          rememberEdit();
+          pictures.push(picture);
+          selectedPicture = picture.id;
+          added++;
+          setTool('image');
+          updateHistoryButtons();
+          scheduleSave();
+        } catch (error) {
+          if (active?.id === noteId) toast(error.message || 'Could not add this picture');
+        }
+      }
+      if (added && active?.id === noteId) toast('Picture added. Position it, then tap Done to write around it.');
+    } finally {
+      addingPictures = false;
+      $('#note-add-image').disabled = false;
+      $('#note-image-input').value = '';
+    }
+  }
+
+  function beginPictureGesture(event) {
+    if (pictureGesture) return false;
+    const point = worldPoint(event);
+    const selected = pictures.find((picture) => picture.id === selectedPicture);
+    const resizing = selected && Math.hypot(point.x - selected.x - selected.width, point.y - selected.y - selected.height) <= 22 / camera.zoom;
+    const picture = resizing ? selected : [...pictures].reverse().find((item) =>
+      point.x >= item.x && point.x <= item.x + item.width && point.y >= item.y && point.y <= item.y + item.height);
+    selectedPicture = picture?.id || null;
+    updatePictureControls();
+    redraw();
+    if (!picture) return false;
+    pictureGesture = { pointerId: event.pointerId, pointerType: event.pointerType, picture, start: point, screen: screenPoint(event), before: { ...picture }, snapshot: editSnapshot(), resizing };
+    return true;
+  }
+
+  function finishPictureGesture(cancel = false) {
+    if (!pictureGesture) return;
+    const { picture, before, snapshot } = pictureGesture;
+    pictureGesture = null;
+    if (cancel) Object.assign(picture, before);
+    else if (['x', 'y', 'width', 'height'].some((key) => picture[key] !== before[key])) {
+      rememberEdit(snapshot);
+      scheduleSave();
+    }
+    updateHistoryButtons();
+    redraw();
+  }
+
+  function changePicture(scale = null) {
+    const picture = pictures.find((item) => item.id === selectedPicture);
+    if (!picture) return;
+    rememberEdit();
+    if (scale) {
+      picture.x -= picture.width * (scale - 1) / 2;
+      picture.y -= picture.height * (scale - 1) / 2;
+      picture.width *= scale;
+      picture.height *= scale;
+    } else {
+      pictures = pictures.filter((item) => item !== picture);
+      selectedPicture = null;
+    }
+    updatePictureControls();
+    updateHistoryButtons();
+    redraw();
+    scheduleSave();
+  }
+
+  function paintPictureSelection(dpr) {
+    if (tool !== 'image') return;
+    const picture = pictures.find((item) => item.id === selectedPicture);
+    if (!picture) return;
+    const x = (picture.x - camera.x) * camera.zoom * dpr;
+    const y = (picture.y - camera.y) * camera.zoom * dpr;
+    const width = picture.width * camera.zoom * dpr;
+    const height = picture.height * camera.zoom * dpr;
+    ctx.save();
+    ctx.strokeStyle = '#2563EB';
+    ctx.lineWidth = 2 * dpr;
+    ctx.strokeRect(x, y, width, height);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(x + width, y + height, 8 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
   }
 
   function resizeCanvas() {
@@ -382,6 +535,13 @@ export function initNotes({ supabase, toast }) {
     }
     event.preventDefault();
     canvas.setPointerCapture?.(event.pointerId);
+    if (tool === 'image' && !spaceHeld && !touchPointers.size && beginPictureGesture(event)) return;
+    if (pictureGesture) {
+      if (event.pointerType === 'touch' && pictureGesture.pointerType === 'touch') {
+        touchPointers.set(pictureGesture.pointerId, pictureGesture.screen);
+      }
+      finishPictureGesture();
+    }
     if (event.pointerType === 'touch') {
       const point = screenPoint(event);
       touchPointers.set(event.pointerId, point);
@@ -399,6 +559,7 @@ export function initNotes({ supabase, toast }) {
       mousePan = { pointerId: event.pointerId, start: screenPoint(event), camera: { ...camera } };
       return;
     }
+    if (tool === 'image') return;
     if (tool === 'fill') {
       fillAt(worldPoint(event));
       return;
@@ -416,6 +577,21 @@ export function initNotes({ supabase, toast }) {
 
   function movePointer(event) {
     if (event.pointerType === 'pen') lastPenAt = Date.now();
+    if (pictureGesture?.pointerId === event.pointerId) {
+      const point = worldPoint(event);
+      pictureGesture.screen = screenPoint(event);
+      const { picture, start, before, resizing } = pictureGesture;
+      if (resizing) {
+        const scale = clamp((point.x - before.x) / before.width, .1, 10);
+        picture.width = before.width * scale;
+        picture.height = before.height * scale;
+      } else {
+        picture.x = before.x + point.x - start.x;
+        picture.y = before.y + point.y - start.y;
+      }
+      requestRedraw();
+      return;
+    }
     if (event.pointerType === 'touch') {
       if (!touchPointers.has(event.pointerId)) return;
       event.preventDefault();
@@ -466,6 +642,7 @@ export function initNotes({ supabase, toast }) {
       penDown = false;
       lastPenAt = Date.now();
     }
+    if (pictureGesture?.pointerId === event.pointerId) { finishPictureGesture(event.type === 'pointercancel'); return; }
     if (event.pointerType === 'touch') {
       if (!touchPointers.has(event.pointerId)) return;
       event.preventDefault();
@@ -519,6 +696,7 @@ export function initNotes({ supabase, toast }) {
         toast(`${shape.label} tidied up`);
       }
     }
+    rememberEdit();
     strokes.push(finishedStroke);
     inkStamp++;
     redraw();
@@ -915,6 +1093,11 @@ export function initNotes({ supabase, toast }) {
       liveDrawn = 0;
     }
 
+    ctx.globalCompositeOperation = 'destination-over';
+    paintPictures(ctx, pictures, map, strokeScale);
+    ctx.globalCompositeOperation = 'source-over';
+    paintPictureSelection(dpr);
+
     if (paperKey !== view) {
       paperKey = view;
       updatePaperGrid();
@@ -1258,6 +1441,7 @@ export function initNotes({ supabase, toast }) {
       y: Math.round((originY + y / scale) * 10) / 10,
     })));
 
+    rememberEdit();
     strokes.push({ tool: 'fill', colour, contours });
     inkStamp++;
     redoStack = [];
@@ -1282,7 +1466,7 @@ export function initNotes({ supabase, toast }) {
     }
   }
 
-  function contentBounds(items = strokes) {
+  function contentBounds(items = strokes, photos = pictures) {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -1296,6 +1480,12 @@ export function initNotes({ supabase, toast }) {
         maxX = Math.max(maxX, point.x);
         maxY = Math.max(maxY, point.y);
       }
+    }
+    for (const picture of photos) {
+      minX = Math.min(minX, picture.x);
+      minY = Math.min(minY, picture.y);
+      maxX = Math.max(maxX, picture.x + picture.width);
+      maxY = Math.max(maxY, picture.y + picture.height);
     }
     if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 1200, maxY: 1600 };
     return { minX, minY, maxX, maxY };
@@ -1313,15 +1503,16 @@ export function initNotes({ supabase, toast }) {
     scheduleSave();
   }
 
-  function drawThumbnail(targetCanvas, drawing) {
+  async function drawThumbnail(targetCanvas, drawing) {
     const migrated = migrateDrawing(drawing);
+    await Promise.allSettled(migrated.pictures.map(loadPicture));
     const thumbnailStrokes = migrated.strokes;
     const rect = targetCanvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     targetCanvas.width = Math.max(1, Math.round(rect.width * dpr));
     targetCanvas.height = Math.max(1, Math.round(rect.height * dpr));
-    if (!thumbnailStrokes.length) return;
-    const bounds = contentBounds(thumbnailStrokes);
+    if (!thumbnailStrokes.length && !migrated.pictures.length) return;
+    const bounds = contentBounds(thumbnailStrokes, migrated.pictures);
     const width = Math.max(100, bounds.maxX - bounds.minX);
     const height = Math.max(100, bounds.maxY - bounds.minY);
     const padding = 22 * dpr;
@@ -1331,18 +1522,22 @@ export function initNotes({ supabase, toast }) {
     const target = targetCanvas.getContext('2d');
     const map = (point) => ({ x: point.x * scale + offsetX, y: point.y * scale + offsetY });
     paintStrokes(target, thumbnailStrokes, map, scale, migrated.theme);
+    target.globalCompositeOperation = 'destination-over';
+    paintPictures(target, migrated.pictures, map, scale);
     target.globalCompositeOperation = 'source-over';
   }
 
   function updateHistoryButtons() {
-    $('#note-undo').disabled = strokes.length === 0;
+    $('#note-undo').disabled = strokes.length === 0 && undoStack.length === 0;
     $('#note-redo').disabled = redoStack.length === 0;
   }
 
   function undo() {
-    const stroke = strokes.pop();
-    if (stroke?.tool === 'scratch-erase') strokes.push(...(stroke.removed || []));
-    if (stroke) redoStack.push(stroke);
+    if (pictureGesture) finishPictureGesture();
+    if (!undoStack.length && !strokes.length) return;
+    redoStack.push(editSnapshot());
+    if (undoStack.length) restoreEdit(undoStack.pop());
+    else strokes.pop();
     inkStamp++;
     redraw();
     updateHistoryButtons();
@@ -1350,14 +1545,9 @@ export function initNotes({ supabase, toast }) {
   }
 
   function redo() {
-    const stroke = redoStack.pop();
-    if (stroke?.tool === 'scratch-erase') {
-      const removed = new Set(stroke.removed || []);
-      strokes = strokes.filter((item) => !removed.has(item));
-      strokes.push(stroke);
-    } else if (stroke) {
-      strokes.push(stroke);
-    }
+    if (!redoStack.length) return;
+    undoStack.push(editSnapshot());
+    restoreEdit(redoStack.pop());
     inkStamp++;
     redraw();
     updateHistoryButtons();
@@ -1365,8 +1555,12 @@ export function initNotes({ supabase, toast }) {
   }
 
   function setTool(next) {
-    if (next !== 'eraser') previousInkTool = next;
+    if (pictureGesture) finishPictureGesture();
+    if (next !== 'eraser' && next !== 'image') previousInkTool = next;
     tool = next;
+    if (tool !== 'image') selectedPicture = null;
+    updatePictureControls();
+    redraw();
     $$('.ink-tool[data-tool]').forEach((button) => {
       const selected = button.dataset.tool === tool;
       button.classList.toggle('is-active', selected);
@@ -1533,14 +1727,23 @@ export function initNotes({ supabase, toast }) {
       }
     }
     const map = (point) => ({ x: (point.x - minX) * scale, y: (point.y - minY) * scale });
-    paintStrokes(outputCtx, strokes, map, scale);
+    paintPictures(outputCtx, pictures, map, scale);
+    const ink = document.createElement('canvas');
+    ink.width = output.width;
+    ink.height = output.height;
+    paintStrokes(ink.getContext('2d'), strokes, map, scale);
+    outputCtx.drawImage(ink, 0, 0);
     outputCtx.globalCompositeOperation = 'destination-over';
     outputCtx.fillStyle = paperColour;
     outputCtx.fillRect(0, 0, output.width, output.height);
     return output;
   }
 
-  function exportPage() {
+  async function exportPage() {
+    const noteId = active?.id;
+    try { await Promise.all(pictures.map(loadPicture)); }
+    catch { toast('A picture could not be loaded. Please reopen the note and try again.'); return; }
+    if (active?.id !== noteId) return;
     const output = renderPage(1.5);
     output.toBlob((blob) => {
       if (!blob) return;
@@ -1763,6 +1966,25 @@ export function initNotes({ supabase, toast }) {
   selectColour(colour);
   setSize(toolSizes[tool] || 4, false);
   $('#note-title').addEventListener('input', scheduleSave);
+  $('#note-add-image').addEventListener('click', () => { closePops(); $('#note-image-input').click(); });
+  $('#note-image-input').addEventListener('change', (event) => addPictures([...event.target.files]));
+  $('#picture-smaller').addEventListener('click', () => changePicture(.85));
+  $('#picture-larger').addEventListener('click', () => changePicture(1.15));
+  $('#picture-remove').addEventListener('click', () => changePicture());
+  $('#picture-done').addEventListener('click', () => setTool(previousInkTool));
+  document.addEventListener('paste', (event) => {
+    if (editor.hidden || !$('#clean-panel').hidden || event.target.closest?.('input, textarea, [contenteditable="true"]')) return;
+    const files = [...(event.clipboardData?.items || [])].filter((item) => item.kind === 'file' && item.type.startsWith('image/')).map((item) => item.getAsFile()).filter(Boolean);
+    if (files.length) { event.preventDefault(); addPictures(files); }
+  });
+  paper.addEventListener('dragover', (event) => {
+    if ([...(event.dataTransfer?.types || [])].includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }
+  });
+  paper.addEventListener('drop', (event) => {
+    event.preventDefault();
+    const files = [...(event.dataTransfer?.files || [])];
+    if (files.length) addPictures(files, worldPoint(event));
+  });
   $('#note-back').addEventListener('click', closeNote);
   $('#note-undo').addEventListener('click', undo);
   $('#note-redo').addEventListener('click', redo);
@@ -1796,6 +2018,10 @@ export function initNotes({ supabase, toast }) {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && openPop) { closePops(); return; }
     if (editor.hidden || event.target.matches?.('input, textarea')) return;
+    if (event.key === 'Escape' && tool === 'image') { setTool(previousInkTool); return; }
+    if ((event.key === 'Delete' || event.key === 'Backspace') && tool === 'image' && selectedPicture) {
+      event.preventDefault(); changePicture(); return;
+    }
     if (event.code === 'Space') {
       spaceHeld = true;
       event.preventDefault();

@@ -1261,6 +1261,12 @@ body.notes-active .fab { display: none; }
 .paper-stage:has(.paper-theme-dark) .canvas-zoom { border-color: rgba(226, 232, 240, .14); background: rgba(20, 29, 42, .86); }
 .paper-stage:has(.paper-theme-dark) .canvas-zoom button { color: #CBD5E1; }
 #ink-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.picture-controls { position: absolute; z-index: 2; top: 12px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); padding: 9px 12px; border: 1px solid #34445c; border-radius: 14px; background: #101b2e; box-shadow: 0 4px 20px #0003; color: #dbeafe; text-align: center; }
+.picture-controls > span { display: block; font-size: 12px; line-height: 1.4; margin-bottom: 7px; }
+.picture-actions { display: flex; justify-content: center; gap: 6px; }
+.picture-actions button { min-width: 40px; min-height: 36px; padding: 6px 10px; border: 1px solid #43536b; border-radius: 8px; background: #1c2c43; color: #edf5ff; font-size: 12px; }
+.picture-actions button:disabled { opacity: .4; cursor: default; }
+#picture-done { background: #245ec7; border-color: #4380ee; }
 /* A palm on the glass must not start a selection or a callout. */
 #note-editor, #paper, #ink-canvas { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
 #note-editor input, #note-editor textarea { -webkit-user-select: text; user-select: text; }

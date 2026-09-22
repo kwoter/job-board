@@ -222,6 +222,8 @@
       <input id="note-title" class="note-title-input" value="Untitled note" aria-label="Note title">
       <div class="save-state" id="note-save-state"><span></span> Saved</div>
       <div class="editor-head-actions">
+        <button id="note-add-image" class="editor-icon-btn" title="Add pictures" aria-label="Add pictures"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 3-3 6 6"/></svg></button>
+        <input id="note-image-input" type="file" accept="image/*" multiple hidden>
         <button id="note-undo" class="editor-icon-btn" aria-label="Undo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 4 12l5 5"/><path d="M20 17a7 7 0 0 0-7-7H4"/></svg></button>
         <button id="note-redo" class="editor-icon-btn" aria-label="Redo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m15 7 5 5-5 5"/><path d="M4 17a7 7 0 0 1 7-7h9"/></svg></button>
         <button id="note-clean" class="clean-btn">
@@ -239,6 +241,7 @@
     <div class="note-workspace">
       <aside class="instrument-rail" aria-label="Drawing tools">
         <div class="tool-group" role="radiogroup" aria-label="Ink tool">
+          <button class="ink-tool" data-tool="image" title="Move and resize pictures" aria-label="Move and resize pictures" aria-checked="false"><svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="4" y="4" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m4 19 6-6 4 4 3-3 5 5"/></svg><span>Pictures</span></button>
           <button class="ink-tool is-active" data-tool="fountain" title="Fountain pen" aria-label="Fountain pen" aria-checked="true">
             <svg viewBox="0 0 26 26" fill="none"><path d="M8 19 5 21l2-4L16.8 7.2l2 2L8 19Z" stroke="currentColor" stroke-width="1.8"/><path d="m15.7 8.3 2 2M17.8 6.2l2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Ink</span>
           </button>
@@ -277,6 +280,15 @@
       </aside>
 
       <main class="paper-stage">
+        <div id="picture-controls" class="picture-controls" hidden>
+          <span id="picture-hint" role="status">Tap a picture to move or resize it</span>
+          <div class="picture-actions">
+            <button id="picture-smaller" aria-label="Make picture smaller" disabled>−</button>
+            <button id="picture-larger" aria-label="Make picture larger" disabled>＋</button>
+            <button id="picture-remove" disabled>Remove</button>
+            <button id="picture-done">Done</button>
+          </div>
+        </div>
         <div id="paper" class="paper paper-dot">
           <canvas id="ink-canvas" aria-label="Handwriting canvas"></canvas>
         </div>

@@ -1,10 +1,11 @@
-const CACHE = 'field-v16';
+const CACHE = 'field-v17';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './notes.js',
+  './note-pictures.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
