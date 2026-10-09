@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.4';
 import { initNotes } from './notes.js';
+import { initWriteJobs } from './write-jobs.js';
 
 const SUPABASE_URL = 'https://kmxhcvmxeoqglpshzuns.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtteGhjdm14ZW9xZ2xwc2h6dW5zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzODg0MTIsImV4cCI6MjA5NTk2NDQxMn0.-Nm_KAabbu9FQTql81blTmULPivBUnzwXa_eDN5dFao';
@@ -206,7 +207,7 @@ function startApp() {
   subscribeRealtime();
   initBell();
   if (!notesReady) {
-    initNotes({ supabase, toast });
+    initNotes({ supabase, toast, url: SUPABASE_URL, anon: SUPABASE_ANON });
     notesReady = true;
   }
   $('#app-view').hidden = false;
@@ -797,6 +798,7 @@ function toLocalInput(iso) {
 }
 
 function openSheet(job = null) {
+  const writing = prepareWrite(!job);
   editingId = job?.id ?? null;
   $('#sheet-title').textContent = job ? 'Edit job' : 'New job';
   $('#f-title').value = job?.title ?? '';
@@ -821,7 +823,7 @@ function openSheet(job = null) {
     sheet.classList.add('is-open');
     backdrop.classList.add('is-open');
   });
-  if (!job) setTimeout(() => $('#f-title').focus({ preventScroll: true }), 380);
+  if (!job && !writing) setTimeout(() => $('#f-title').focus({ preventScroll: true }), 380);
 }
 
 function closeSheet() {
@@ -836,6 +838,14 @@ function syncRemindSelect() {
   if (remind.disabled) remind.value = '';
 }
 $('#f-due').addEventListener('input', syncRemindSelect);
+
+const prepareWrite = initWriteJobs({
+  supabase,
+  url: SUPABASE_URL,
+  anon: SUPABASE_ANON,
+  toast,
+  onAdded: () => { closeSheet(); loadJobs(); },
+});
 
 $('#fab').addEventListener('click', () => openSheet());
 $('#add-desktop').addEventListener('click', () => openSheet());

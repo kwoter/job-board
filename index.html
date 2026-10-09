@@ -412,6 +412,33 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
+    <div id="sheet-mode" class="segmented sheet-mode" role="tablist" aria-label="How to add">
+      <button type="button" data-mode="write">Write a list</button>
+      <button type="button" data-mode="type" class="is-active">Type one</button>
+    </div>
+    <div id="write-panel" class="write-panel" hidden>
+      <div id="write-pad" class="write-pad">
+        <canvas id="write-canvas" aria-label="Write your jobs here, one per line"></canvas>
+        <p class="write-hint">Write your jobs, one per line</p>
+      </div>
+      <div class="write-tools">
+        <button id="write-undo" class="btn-secondary" type="button">Undo</button>
+        <button id="write-clear" class="btn-secondary" type="button">Clear</button>
+        <button id="write-read" class="btn-primary" type="button" disabled>
+          <span class="btn-label">Read my list</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+      </div>
+      <p id="write-status" class="write-status" aria-live="polite"></p>
+      <div id="write-review" class="write-review" hidden>
+        <div id="write-list" class="write-list"></div>
+        <button id="write-more" class="write-more" type="button">+ Add another</button>
+        <button id="write-add" class="btn-primary btn-block" type="button">
+          <span class="btn-label">Add jobs to To Do</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+      </div>
+    </div>
     <form id="job-form" novalidate>
       <label class="field">
         <span class="field-label">Job</span>

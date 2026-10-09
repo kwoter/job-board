@@ -1,3 +1,4 @@
+import { readJobsFromImage } from './write-jobs.js';
 import { loadPicture, preparePicture, paintPictures, MAX_PICTURE_DATA } from './note-pictures.js';
 
 const DRAWING_VERSION = 4;
@@ -5,7 +6,7 @@ const DEFAULT_DRAWING = () => ({ version: DRAWING_VERSION, strokes: [], pictures
 const MIN_ZOOM = .05;
 const MAX_ZOOM = 8;
 
-export function initNotes({ supabase, toast }) {
+export function initNotes({ supabase, toast, url, anon }) {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -1852,30 +1853,13 @@ export function initNotes({ supabase, toast }) {
     setTimeout(() => $('#clean-text').focus(), 120);
   }
 
-  function loadTesseract() {
-    if (window.Tesseract) return Promise.resolve(window.Tesseract);
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-      script.onload = () => resolve(window.Tesseract);
-      script.onerror = reject;
-      document.head.append(script);
-    });
-  }
-
   async function recognisePage(onProgress = null) {
     const visibleStrokes = strokes.filter((stroke) => stroke.tool !== 'eraser' && stroke.tool !== 'scratch-erase');
     if (!visibleStrokes.length) throw new Error('empty page');
-    const Tesseract = await loadTesseract();
-    const image = renderPage(1.35).toDataURL('image/png');
-    const result = await Tesseract.recognize(image, 'eng', {
-      logger: (message) => {
-        if (message.status === 'recognizing text') onProgress?.(Math.round((message.progress || 0) * 100));
-      },
-    });
-    const text = result?.data?.text?.trim() || '';
-    if (!text) throw new Error('unreadable page');
-    return text;
+    const dataUrl = renderPage(1.35).toDataURL('image/png');
+    const { jobs } = await readJobsFromImage({ supabase, url, anon, dataUrl, onProgress });
+    if (!jobs.length) throw new Error('unreadable page');
+    return jobs.join('\n');
   }
 
   async function readPage() {
