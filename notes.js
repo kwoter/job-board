@@ -1857,7 +1857,10 @@ export function initNotes({ supabase, toast, url, anon }) {
     const visibleStrokes = strokes.filter((stroke) => stroke.tool !== 'eraser' && stroke.tool !== 'scratch-erase');
     if (!visibleStrokes.length) throw new Error('empty page');
     const dataUrl = renderPage(1.35).toDataURL('image/png');
-    const { jobs } = await readJobsFromImage({ supabase, url, anon, dataUrl, onProgress });
+    // Pen strokes read best, but only when nothing has been rubbed out (the reader can't see the eraser).
+    const rubbed = strokes.some((stroke) => stroke.tool === 'eraser');
+    const ink = rubbed ? null : visibleStrokes.filter((stroke) => stroke.tool !== 'fill' && stroke.tool !== 'highlighter' && stroke.points?.length);
+    const { jobs } = await readJobsFromImage({ supabase, url, anon, dataUrl, strokes: ink, onProgress });
     if (!jobs.length) throw new Error('unreadable page');
     return jobs.join('\n');
   }

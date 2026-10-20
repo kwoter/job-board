@@ -1457,6 +1457,10 @@ body.notes-active .fab { display: none; }
 
 /* ---------- Write a list (New job sheet) ---------- */
 .sheet-mode { margin-bottom: 16px; }
+.list-switch { margin-bottom: 10px; max-width: 420px; }
+.list-switch[hidden], .list-note[hidden] { display: none; }
+.list-note { margin: 0 0 14px; color: var(--text-2); font-size: 13.5px; line-height: 1.45; }
+.chip.from-chip { background: rgba(52, 211, 153, 0.1); border-color: rgba(52, 211, 153, 0.22); color: #34D399; }
 .sheet-mode[hidden] { display: none; }
 .write-pad {
   --ink: #EDF2FB;

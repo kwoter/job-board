@@ -50,6 +50,11 @@ let lockBusy = false;
 let pinBuffer = '';
 let wrongAttempts = 0;
 let notesReady = false;
+// Shared lists: you can be on someone else's list as well as your own (board_shares).
+let meId = null;
+let viewing = null;
+let lists = [];
+const names = new Map();
 
 /* ---------- Service worker ---------- */
 if ('serviceWorker' in navigator) {
@@ -203,7 +208,7 @@ function startApp() {
   $('#hero-date').textContent = new Date().toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long',
   });
-  loadJobs();
+  loadLists().then(loadJobs);
   subscribeRealtime();
   initBell();
   if (!notesReady) {
@@ -236,9 +241,12 @@ function paintGreeting() {
 // right offline. The People panel is enforced server-side, not by this flag.
 async function loadProfile() {
   $('#people-btn').hidden = false;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return;
   const { data, error } = await supabase
     .from('board_profiles')
     .select('username, display_name, is_admin, pin_length')
+    .eq('user_id', session.user.id)
     .maybeSingle();
   if (error || !data) return;
   localStorage.setItem(USER_STORE, data.username);
@@ -402,12 +410,55 @@ $('#bio-enable').addEventListener('click', async () => {
 });
 $('#bio-dismiss').addEventListener('click', () => { $('#bio-prompt').hidden = true; });
 
+/* ---------- Lists (yours, plus any you can add to) ---------- */
+async function loadLists() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return;
+  meId = session.user.id;
+  if (!viewing) viewing = meId;
+  const [{ data: shares }, { data: people }] = await Promise.all([
+    supabase.from('board_shares').select('owner_id, member_id'),
+    supabase.from('board_profiles').select('user_id, display_name'),
+  ]);
+  (people ?? []).forEach((p) => names.set(p.user_id, p.display_name));
+  const owners = (shares ?? []).filter((s) => s.member_id === meId).map((s) => s.owner_id);
+  lists = [{ id: meId, label: 'My jobs' }, ...owners.map((id) => ({ id, label: `${names.get(id) || 'Their'}'s list` }))];
+  if (!lists.some((l) => l.id === viewing)) viewing = meId;
+  paintListSwitch();
+}
+
+const onOwnList = () => !viewing || viewing === meId;
+const viewingName = () => names.get(viewing) || 'them';
+
+function paintListSwitch() {
+  const bar = $('#list-switch');
+  bar.hidden = lists.length < 2;
+  bar.replaceChildren(...lists.map((l) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = l.label;
+    b.classList.toggle('is-active', l.id === viewing);
+    b.addEventListener('click', () => {
+      if (l.id === viewing) return;
+      viewing = l.id;
+      knownIds = new Set();
+      firstRender = true;
+      paintListSwitch();
+      loadJobs();
+    });
+    return b;
+  }));
+  const note = $('#list-note');
+  note.hidden = onOwnList();
+  note.textContent = onOwnList() ? '' : `Jobs you add here go straight onto ${viewingName()}'s board and ping their phone. You only see the ones you've added.`;
+  $('#add-desktop').lastChild.textContent = onOwnList() ? ' New job' : ` Job for ${viewingName()}`;
+}
+
 /* ---------- Data ---------- */
 async function loadJobs() {
-  const { data, error } = await supabase
-    .from('board_jobs')
-    .select('*')
-    .order('created_at', { ascending: false });
+  let query = supabase.from('board_jobs').select('*');
+  if (viewing) query = query.eq('user_id', viewing);
+  const { data, error } = await query.order('created_at', { ascending: false });
   if (error) { toast('Could not load jobs'); return; }
   jobs = data ?? [];
   render();
@@ -677,6 +728,9 @@ function cardEl(job, draggable) {
   meta.className = 'card-meta';
   if (job.priority === 'high') meta.appendChild(chip('High', 'flag', 'flag-high'));
   if (job.priority === 'low') meta.appendChild(chip('Low', 'flag', 'flag-low'));
+  if (job.created_by && job.created_by !== job.user_id && job.created_by !== meId) {
+    meta.appendChild(chip(`From ${names.get(job.created_by) || 'someone'}`, 'tag', 'from-chip'));
+  }
   if (job.client) meta.appendChild(chip(job.client, 'tag'));
   if (job.due_at) {
     const { label, cls } = dueInfo(job.due_at, job.status);
@@ -800,7 +854,7 @@ function toLocalInput(iso) {
 function openSheet(job = null) {
   const writing = prepareWrite(!job);
   editingId = job?.id ?? null;
-  $('#sheet-title').textContent = job ? 'Edit job' : 'New job';
+  $('#sheet-title').textContent = job ? 'Edit job' : onOwnList() ? 'New job' : `New job for ${viewingName()}`;
   $('#f-title').value = job?.title ?? '';
   $('#f-client').value = job?.client ?? '';
   $('#f-notes').value = job?.notes ?? '';
@@ -844,6 +898,7 @@ const prepareWrite = initWriteJobs({
   url: SUPABASE_URL,
   anon: SUPABASE_ANON,
   toast,
+  listOwner: () => (onOwnList() ? null : viewing),
   onAdded: () => { closeSheet(); loadJobs(); },
 });
 
@@ -892,6 +947,7 @@ $('#job-form').addEventListener('submit', async (e) => {
   if (editingId) {
     ({ error } = await supabase.from('board_jobs').update(record).eq('id', editingId));
   } else {
+    if (!onOwnList()) record.user_id = viewing;
     ({ error } = await supabase.from('board_jobs').insert(record));
   }
   btn.classList.remove('is-loading');

@@ -1,6 +1,9 @@
 // "Write a list" on the New job sheet: write jobs with the Pencil, the page is
-// read (Claude via board-read-jobs, Tesseract on the device as a fallback),
-// each job gets its own row to check, and they are all added to To Do at once.
+// read, each job gets its own row to check, and they are all added to To Do at once.
+// Readers, best first: the pen strokes line by line (Google's handwriting
+// recogniser, the one behind its handwriting keyboard: free, no key), then
+// Claude on a picture (board-read-jobs), then Tesseract on the device (weak on
+// handwriting, it is what produced the random symbols, so it is only the last resort).
 
 const $ = (s, el = document) => el.querySelector(s);
 const MODE_STORE = 'field-new-job-mode';
@@ -34,8 +37,108 @@ export function splitJobLines(text) {
     });
 }
 
-// Returns { jobs, by } where by is 'claude' or 'device'. Throws if neither can read it.
-export async function readJobsFromImage({ supabase, url, anon, dataUrl, onProgress }) {
+const HANDWRITING_URL = 'https://inputtools.google.com/request?itc=en-t-i0-handwrit&app=field';
+
+// Strokes are [{ points: [{ x, y, t? }] }]. Groups them into written lines by height on
+// the page, so each line is read on its own and becomes its own job.
+export function groupLines(strokes) {
+  const boxes = strokes
+    .filter((s) => s.points?.length)
+    .map((s) => {
+      const ys = s.points.map((p) => p.y);
+      const xs = s.points.map((p) => p.x);
+      const top = Math.min(...ys);
+      const bottom = Math.max(...ys);
+      return { s, top, bottom, left: Math.min(...xs), mid: (top + bottom) / 2, h: bottom - top };
+    });
+  if (!boxes.length) return [];
+  const heights = boxes.map((b) => b.h).sort((a, b) => a - b);
+  const typical = Math.max(8, heights[Math.floor(heights.length * 0.6)]);
+  const small = (b) => b.h < typical * 0.35;
+  const lines = [];
+  // Letters first, then dots and dashes go to whichever line they sit nearest.
+  for (const b of boxes.filter((x) => !small(x)).sort((a, z) => a.mid - z.mid)) {
+    const line = lines.find((l) => b.mid > l.top - typical * 0.15 && b.mid < l.bottom + typical * 0.15
+      && Math.min(b.bottom, l.bottom) - Math.max(b.top, l.top) > Math.min(b.h, l.bottom - l.top) * 0.3);
+    if (line) {
+      line.items.push(b);
+      line.top = Math.min(line.top, b.top);
+      line.bottom = Math.max(line.bottom, b.bottom);
+    } else {
+      lines.push({ top: b.top, bottom: b.bottom, items: [b] });
+    }
+  }
+  // A cross-bar or capital can open a line before its letters arrive: fold overlapping lines together.
+  for (let i = 0; i < lines.length; i++) {
+    for (let j = i + 1; j < lines.length; j++) {
+      const a = lines[i];
+      const b = lines[j];
+      const overlap = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      if (overlap > Math.min(a.bottom - a.top, b.bottom - b.top) * 0.5) {
+        a.items.push(...b.items);
+        a.top = Math.min(a.top, b.top);
+        a.bottom = Math.max(a.bottom, b.bottom);
+        lines.splice(j, 1);
+        j = i;
+      }
+    }
+  }
+  for (const b of boxes.filter(small)) {
+    if (!lines.length) { lines.push({ top: b.top, bottom: b.bottom, items: [b] }); continue; }
+    const dist = (l) => (b.mid < l.top ? l.top - b.mid : b.mid > l.bottom ? b.mid - l.bottom : 0);
+    lines.reduce((best, l) => (dist(l) < dist(best) ? l : best)).items.push(b);
+  }
+  return lines
+    .sort((a, b) => a.top - b.top)
+    .map((l) => l.items.sort((a, b) => a.left - b.left).map((b) => b.s));
+}
+
+async function readLine(strokes) {
+  const all = strokes.flatMap((s) => s.points);
+  const minX = Math.min(...all.map((p) => p.x));
+  const minY = Math.min(...all.map((p) => p.y));
+  // Real pen timings help the reader; if they're missing or flat (notes, replays), make up a steady pace.
+  const times = all.map((p) => p.t).filter((t) => t != null);
+  const timed = times.length === all.length && Math.max(...times) - Math.min(...times) >= all.length;
+  const t0 = timed ? Math.min(...times) : 0;
+  let clock = 0;
+  const ink = strokes.map((s) => {
+    if (!timed) clock += 120;
+    return [
+      s.points.map((p) => Math.round(p.x - minX)),
+      s.points.map((p) => Math.round(p.y - minY)),
+      s.points.map((p) => (timed ? Math.round(p.t - t0) : (clock += 10))),
+    ];
+  });
+  const width = Math.max(...all.map((p) => p.x)) - minX;
+  const height = Math.max(...all.map((p) => p.y)) - minY;
+  const res = await fetch(HANDWRITING_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      options: 'enable_pre_space',
+      requests: [{ writing_guide: { writing_area_width: Math.round(width + 20), writing_area_height: Math.round(height + 20) }, ink, language: 'en' }],
+    }),
+  });
+  const out = await res.json();
+  if (out?.[0] !== 'SUCCESS') throw new Error('handwriting reader refused');
+  return out[1]?.[0]?.[1]?.[0] ?? '';
+}
+
+export async function readJobsFromStrokes(strokes) {
+  const lines = groupLines(strokes);
+  const texts = await Promise.all(lines.map(readLine));
+  return splitJobLines(texts.join('\n'));
+}
+
+// Returns { jobs, by } where by is 'pen', 'claude' or 'device'. Throws if none can read it.
+export async function readJobsFromImage({ supabase, url, anon, dataUrl, strokes, onProgress }) {
+  if (strokes?.length) {
+    try {
+      const jobs = await readJobsFromStrokes(strokes);
+      if (jobs.length) return { jobs, by: 'pen' };
+    } catch { /* offline or reader down: try the picture */ }
+  }
   try {
     const { data: { session } } = await supabase.auth.getSession();
     const res = await fetch(`${url}/functions/v1/board-read-jobs`, {
@@ -53,7 +156,7 @@ export async function readJobsFromImage({ supabase, url, anon, dataUrl, onProgre
   return { jobs: splitJobLines(result?.data?.text), by: 'device' };
 }
 
-export function initWriteJobs({ supabase, url, anon, toast, onAdded }) {
+export function initWriteJobs({ supabase, url, anon, toast, listOwner, onAdded }) {
   const form = $('#job-form');
   const panel = $('#write-panel');
   const modeBar = $('#sheet-mode');
@@ -118,7 +221,7 @@ export function initWriteJobs({ supabase, url, anon, toast, onAdded }) {
 
   function point(e) {
     const rect = canvas.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top, p: e.pointerType === 'pen' ? e.pressure : 0.5 };
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top, p: e.pointerType === 'pen' ? e.pressure : 0.5, t: Math.round(e.timeStamp) };
   }
 
   // Once the Pencil has been used, a lone finger or resting palm doesn't draw.
@@ -225,7 +328,7 @@ export function initWriteJobs({ supabase, url, anon, toast, onAdded }) {
     status.textContent = 'Reading your list…';
     try {
       const { jobs, by } = await readJobsFromImage({
-        supabase, url, anon, dataUrl: pageImage(),
+        supabase, url, anon, dataUrl: pageImage(), strokes,
         onProgress: (n) => { status.textContent = `Reading on this iPad… ${n}%`; },
       });
       list.replaceChildren(...(jobs.length ? jobs : ['']).map(row));
@@ -256,7 +359,9 @@ export function initWriteJobs({ supabase, url, anon, toast, onAdded }) {
     addBtn.classList.add('is-loading');
     // The board shows newest first, so the first line written gets the latest time.
     const now = Date.now();
+    const owner = listOwner?.();
     const { error } = await supabase.from('board_jobs').insert(titles.map((title, i) => ({
+      ...(owner ? { user_id: owner } : {}),
       created_at: new Date(now + (titles.length - i) * 1000).toISOString(),
       title: title.slice(0, 140),
       client: null,
