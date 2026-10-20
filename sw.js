@@ -1,4 +1,4 @@
-const CACHE = 'field-v19';
+const CACHE = 'field-v20';
 const SHELL = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const SHELL = [
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png',
   './icons/badge-96.png',
 ];

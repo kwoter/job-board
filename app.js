@@ -204,6 +204,7 @@ async function unlockApp(derived) {
 
 function startApp() {
   paintGreeting();
+  paintMe();
   loadProfile();
   $('#hero-date').textContent = new Date().toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long',
@@ -253,6 +254,13 @@ async function loadProfile() {
   localStorage.setItem(NAME_STORE, data.display_name);
   localStorage.setItem(ADMIN_STORE, data.is_admin ? 'yes' : 'no');
   paintGreeting();
+  paintMe();
+}
+
+function paintMe() {
+  const name = displayName() || 'Account';
+  $('#me-name').textContent = name;
+  $('#me-initial').textContent = name[0].toUpperCase();
 }
 
 // If the session ever drops mid-use, quietly sign back in with the device key.
@@ -644,7 +652,8 @@ function upnextCard(job) {
 /* ---------- Completion burst ---------- */
 function burst(x, y) {
   if (reducedMotion()) return;
-  const colours = ['#34D399', '#4D8DFF', '#FBBF24'];
+  const css = getComputedStyle(document.documentElement);
+  const colours = ['--accent', '--mark', '--ink'].map((v) => css.getPropertyValue(v).trim());
   for (let i = 0; i < 11; i++) {
     const p = document.createElement('span');
     p.className = 'particle';
@@ -895,14 +904,47 @@ $('#f-due').addEventListener('input', syncRemindSelect);
 
 const prepareWrite = initWriteJobs({
   supabase,
-  url: SUPABASE_URL,
-  anon: SUPABASE_ANON,
   toast,
   listOwner: () => (onOwnList() ? null : viewing),
   onAdded: () => { closeSheet(); loadJobs(); },
 });
 
 $('#fab').addEventListener('click', () => openSheet());
+
+/* ---------- Write a job (the line on the board: type, or Scribble with the Pencil) ---------- */
+$('#quick-add').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = $('#quick-title');
+  const title = input.value.trim();
+  if (!title) return;
+  const record = { title: title.slice(0, 140), priority: 'normal', status: 'todo' };
+  if (!onOwnList()) record.user_id = viewing;
+  input.value = '';
+  $('#quick-add').classList.add('is-sent');
+  setTimeout(() => $('#quick-add').classList.remove('is-sent'), 500);
+  const { error } = await supabase.from('board_jobs').insert(record);
+  if (error) { input.value = title; toast('Could not add that'); return; }
+  toast(onOwnList() ? 'Added to To Do' : `Added to ${viewingName()}'s list`);
+  loadJobs();
+});
+
+/* ---------- Appearance: Auto follows the device, or pin Paper / Night ---------- */
+const THEME_STORE = 'field-theme';
+function applyTheme(choice) {
+  const root = document.documentElement;
+  if (choice === 'light' || choice === 'dark') root.dataset.theme = choice;
+  else delete root.dataset.theme;
+  $$('#theme-pick button').forEach((b) => b.classList.toggle('is-active', b.dataset.themePick === (choice || 'auto')));
+  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  $$('meta[name="theme-color"]').forEach((m) => { m.content = dark ? '#11120F' : '#F3F0E8'; });
+}
+$$('#theme-pick button').forEach((b) => b.addEventListener('click', () => {
+  const choice = b.dataset.themePick;
+  try { if (choice === 'auto') localStorage.removeItem(THEME_STORE); else localStorage.setItem(THEME_STORE, choice); } catch { /* private mode */ }
+  applyTheme(choice);
+}));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(localStorage.getItem(THEME_STORE)));
+applyTheme(localStorage.getItem(THEME_STORE));
 $('#add-desktop').addEventListener('click', () => openSheet());
 $('#sheet-close').addEventListener('click', closeSheet);
 backdrop.addEventListener('click', closeSheet);
