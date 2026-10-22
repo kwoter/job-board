@@ -356,6 +356,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .btn-danger:hover { background: var(--red-soft); }
 .btn-danger:active { transform: scale(0.98); }
 .btn-danger.confirm { background: var(--red); color: #fff; }
+.btn-ghost {
+  min-height: 46px;
+  margin-top: 10px;
+  background: var(--accent-soft);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--accent);
+  font-size: 14.5px;
+  font-weight: 600;
+  transition: background 160ms ease, transform 100ms var(--ease);
+}
+.btn-ghost:active { transform: scale(0.98); }
+.btn-ghost[hidden] { display: none; }
+.sheet-quick { display: flex; gap: 10px; margin: -4px 0 14px; }
+.sheet-quick:not(:has(button:not([hidden]))) { display: none; }
+.sheet-quick .btn-ghost { flex: 1; margin-top: 0; min-height: 44px; }
 
 .icon-btn {
   position: relative;
@@ -780,6 +796,34 @@ body.notes-active .fab, body.notes-active .btn-add-desktop { display: none !impo
 .card.is-new { animation: cardIn 420ms var(--ease) both; }
 .card.is-leaving { opacity: 0; transform: translateX(24px) scale(0.97); pointer-events: none; }
 .card.dragging { opacity: 0.45; transform: rotate(0.8deg) scale(0.98); }
+.card-grip {
+  flex: none;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 44px;
+  margin: -10px -10px -10px -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--ink-3);
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.card-grip svg { width: 18px; height: 18px; }
+@media (hover: hover) { .card-grip:hover { color: var(--ink-2); background: var(--surface-2); } }
+.card.is-lifted {
+  z-index: 5;
+  cursor: grabbing;
+  box-shadow: var(--shadow-lift);
+  transition: box-shadow 220ms ease, opacity 280ms ease;
+}
+.card.is-lifted .card-grip { cursor: grabbing; color: var(--accent); }
 .card-body { flex: 1; min-width: 0; }
 .card-title { margin: 0; font-size: 15.5px; font-weight: 500; line-height: 1.38; letter-spacing: -0.005em; overflow-wrap: anywhere; }
 .card-notes { margin: 3px 0 0; color: var(--ink-2); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1399,3 +1443,51 @@ body.notes-active .fab, body.notes-active .btn-add-desktop { display: none !impo
 @media (prefers-contrast: more) {
   :root { --line: rgba(26, 27, 23, 0.22); --line-2: rgba(26, 27, 23, 0.38); --ink-3: #6B6962; }
 }
+
+/* ---------- Attach a notepad to a job ---------- */
+.attach-lists { margin-bottom: 14px; }
+.attach-lists[hidden] { display: none; }
+.attach-new { display: flex; gap: 10px; }
+.attach-new input {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15.5px;
+}
+.attach-new .btn-primary { flex: none; padding: 0 16px; }
+.attach-or { margin: 18px 0 8px; color: var(--ink-3); font-size: 13px; }
+.attach-jobs { display: grid; gap: 8px; }
+.attach-job {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 50px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+}
+.attach-job span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.attach-job small { flex: none; color: var(--ink-3); font-size: 12px; }
+.attach-job.is-linked { border-color: var(--accent); background: var(--accent-soft); }
+.attach-job.is-linked small { color: var(--accent); font-weight: 600; }
+.attach-job:active { transform: scale(0.99); }
+.attach-empty { margin: 0; color: var(--ink-3); font-size: 14px; }
+
+/* Someone else's notepad, opened from a job: read and move around, no drawing */
+.note-editor.is-readonly .instrument-rail,
+.note-editor.is-readonly .editor-head-actions,
+.note-editor.is-readonly #picture-controls { display: none; }
+.note-editor.is-readonly .note-title-input { pointer-events: none; }
+.note-chip { background: var(--accent-soft); border-color: transparent; color: var(--accent); }

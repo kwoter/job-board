@@ -240,6 +240,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.2 3.2L16.5 7.5l-3.3 1.2L12 12l-1.2-3.3-3.3-1.2 3.3-1.3L12 3Z"/><path d="m18.5 13 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/></svg>
           Clean up
         </button>
+        <button id="note-attach" class="clean-btn" title="Attach this note to a job" aria-label="Attach this note to a job">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
+          Attach
+        </button>
         <button id="note-add-job" class="note-job-btn" aria-label="Add note to jobs">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="3"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M12 10v4"/></svg>
           <span>Add to jobs</span>
@@ -377,6 +381,22 @@
     </div>
   </div>
 
+  <div id="attach-panel" class="clean-panel" hidden>
+    <div class="clean-panel-card attach-card" role="dialog" aria-modal="true" aria-labelledby="attach-title">
+      <header>
+        <div><span class="eyebrow">Notepad</span><h2 id="attach-title">Attach to a job</h2></div>
+        <button id="attach-close" class="editor-icon-btn" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </header>
+      <div id="attach-lists" class="segmented attach-lists" role="radiogroup" aria-label="Whose list"></div>
+      <form id="attach-new" class="attach-new">
+        <input id="attach-new-title" maxlength="140" placeholder="New job…" aria-label="New job title">
+        <button class="btn-primary" type="submit">Add as new job</button>
+      </form>
+      <p class="attach-or">or attach it to a job already on the list</p>
+      <div id="attach-jobs" class="attach-jobs"></div>
+    </div>
+  </div>
+
   <div id="note-menu" class="note-menu" hidden>
     <button id="export-note">Export page as image</button>
     <button id="delete-note" class="danger">Delete note</button>
@@ -447,6 +467,10 @@
         <span class="field-label">Job</span>
         <input id="f-title" type="text" placeholder="What needs doing?" autocomplete="off" required>
       </label>
+      <div class="sheet-quick">
+        <button id="note-open-btn" class="btn-ghost" type="button" hidden>Open notepad</button>
+        <button id="top-btn" class="btn-ghost" type="button" hidden>Move to top</button>
+      </div>
       <label class="field">
         <span class="field-label">Client or project <em>(optional)</em></span>
         <input id="f-client" type="text" autocomplete="off">

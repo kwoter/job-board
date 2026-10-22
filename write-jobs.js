@@ -222,7 +222,8 @@ export function initWriteJobs({ supabase, toast, listOwner, onAdded }) {
     const chosen = titles();
     if (!chosen.length) return;
     addBtn.classList.add('is-loading');
-    // The board shows newest first, so the first line written gets the latest time.
+    // Each new job goes on top of the list, so insert bottom line first and the list
+    // lands in the order it was written.
     const now = Date.now();
     const owner = listOwner?.();
     const { error } = await supabase.from('board_jobs').insert(chosen.map((title, i) => ({
@@ -231,7 +232,7 @@ export function initWriteJobs({ supabase, toast, listOwner, onAdded }) {
       title: title.slice(0, 140),
       priority: 'normal',
       status: 'todo',
-    })));
+    })).reverse());
     addBtn.classList.remove('is-loading');
     if (error) { toast('Could not add those jobs'); return; }
     toast(`${chosen.length} ${chosen.length === 1 ? 'job' : 'jobs'} added`);

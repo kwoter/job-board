@@ -36,7 +36,6 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const STATUSES = ['todo', 'doing', 'done'];
-const PRIORITY_WEIGHT = { high: 0, normal: 1, low: 2 };
 
 let jobs = [];
 let knownIds = new Set();
@@ -50,6 +49,8 @@ let lockBusy = false;
 let pinBuffer = '';
 let wrongAttempts = 0;
 let notesReady = false;
+let notesApi = null;
+let reorder = null;
 // Shared lists: you can be on someone else's list as well as your own (board_shares).
 let meId = null;
 let viewing = null;
@@ -57,8 +58,23 @@ let lists = [];
 const names = new Map();
 
 /* ---------- Service worker ---------- */
+// A home-screen app on the iPad can sit open for days, so look for a new build every time it
+// comes back to the front and reload into it once it has taken over.
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((reg) => {
+    const check = () => reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+    setInterval(check, 30 * 60 * 1000);
+  }).catch(() => {});
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    // Never yank the page from under an open job or note.
+    const reload = () => (sheet.hidden && !document.querySelector('#note-editor:not([hidden])') ? location.reload() : setTimeout(reload, 5000));
+    reload();
+  });
 }
 
 /* ---------- PIN lock ---------- */
@@ -213,7 +229,10 @@ function startApp() {
   subscribeRealtime();
   initBell();
   if (!notesReady) {
-    initNotes({ supabase, toast, url: SUPABASE_URL, anon: SUPABASE_ANON });
+    notesApi = initNotes({
+      supabase, toast, url: SUPABASE_URL, anon: SUPABASE_ANON,
+      getLists: () => lists, onJobsChanged: () => loadJobs(),
+    });
     notesReady = true;
   }
   $('#app-view').hidden = false;
@@ -458,7 +477,7 @@ function paintListSwitch() {
   }));
   const note = $('#list-note');
   note.hidden = onOwnList();
-  note.textContent = onOwnList() ? '' : `Jobs you add here go straight onto ${viewingName()}'s board and ping their phone. You only see the ones you've added.`;
+  note.textContent = onOwnList() ? '' : `Everything on ${viewingName()}'s list, in the order they'll do it. Drag the grip to reorder, or open a job and Move to top. New jobs go on top and ping their phone.`;
   $('#add-desktop').lastChild.textContent = onOwnList() ? ' New job' : ` Job for ${viewingName()}`;
 }
 
@@ -466,7 +485,7 @@ function paintListSwitch() {
 async function loadJobs() {
   let query = supabase.from('board_jobs').select('*');
   if (viewing) query = query.eq('user_id', viewing);
-  const { data, error } = await query.order('created_at', { ascending: false });
+  const { data, error } = await query.order('position', { ascending: true, nullsFirst: true });
   if (error) { toast('Could not load jobs'); return; }
   jobs = data ?? [];
   render();
@@ -484,19 +503,24 @@ function subscribeRealtime() {
 }
 
 /* ---------- Render ---------- */
+// Running order (22 Oct 2026): jobs sit in the order they were put in (drag the grip, or
+// Move to top), lowest position first. Whoever shares the list can set the order too.
 function sortJobs(list) {
   return [...list].sort((a, b) => {
-    const ad = a.due_at ? Date.parse(a.due_at) : Infinity;
-    const bd = b.due_at ? Date.parse(b.due_at) : Infinity;
-    if (ad !== bd) return ad - bd;
-    const ap = PRIORITY_WEIGHT[a.priority] ?? 1;
-    const bp = PRIORITY_WEIGHT[b.priority] ?? 1;
+    const ap = a.position ?? -Infinity;
+    const bp = b.position ?? -Infinity;
     if (ap !== bp) return ap - bp;
     return Date.parse(b.created_at) - Date.parse(a.created_at);
   });
 }
 
+function topPosition(status) {
+  const pos = jobs.filter((j) => j.status === status && j.position != null).map((j) => j.position);
+  return (pos.length ? Math.min(...pos) : 1) - 1;
+}
+
 function render() {
+  if (reorder) { reorder.stale = true; return; }
   const finePointer = matchMedia('(pointer: fine)').matches;
   const animate = !firstRender && !reducedMotion();
 
@@ -577,8 +601,8 @@ function renderHero() {
     $('#ring-num').textContent = `${doneToday.length}/${total}`;
   }
 
-  // Up next: the most urgent open job
-  const next = sortJobs(open)[0];
+  // Up next: whatever is in progress, else the top of To Do
+  const next = sortJobs(open.filter((j) => j.status === 'doing'))[0] || sortJobs(open)[0];
   const wrap = $('#upnext');
   wrap.replaceChildren();
   wrap.hidden = !next;
@@ -740,6 +764,7 @@ function cardEl(job, draggable) {
   if (job.created_by && job.created_by !== job.user_id && job.created_by !== meId) {
     meta.appendChild(chip(`From ${names.get(job.created_by) || 'someone'}`, 'tag', 'from-chip'));
   }
+  if (job.note_id) meta.appendChild(chip('Notepad', 'note', 'note-chip'));
   if (job.client) meta.appendChild(chip(job.client, 'tag'));
   if (job.due_at) {
     const { label, cls } = dueInfo(job.due_at, job.status);
@@ -751,11 +776,22 @@ function cardEl(job, draggable) {
   if (meta.children.length) body.appendChild(meta);
 
   el.append(btn, body);
+  if (job.status !== 'done') {
+    const grip = document.createElement('button');
+    grip.type = 'button';
+    grip.className = 'card-grip';
+    grip.setAttribute('aria-label', 'Drag to reorder');
+    grip.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+    grip.addEventListener('click', (e) => e.stopPropagation());
+    grip.addEventListener('pointerdown', (e) => startReorder(e, el, job));
+    el.appendChild(grip);
+  }
   el.addEventListener('click', () => openSheet(job));
 
   if (draggable && job.status !== 'done') {
     el.draggable = true;
     el.addEventListener('dragstart', (e) => {
+      if (reorder) { e.preventDefault(); return; }
       e.dataTransfer.setData('text/plain', job.id);
       e.dataTransfer.effectAllowed = 'move';
       el.classList.add('dragging');
@@ -769,6 +805,7 @@ const ICONS = {
   flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
   tag: '<path d="M20.59 13.41 12 22 2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/>',
   clock: '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>',
+  note: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
 };
 
@@ -807,6 +844,73 @@ function remindLabel(job) {
   if (diffMin < 60) return `Reminds ${diffMin}m before`;
   if (diffMin < 1440) return `Reminds ${Math.round(diffMin / 60)}h before`;
   return `Reminds ${Math.round(diffMin / 1440)}d before`;
+}
+
+/* ---------- Reorder: drag the grip up or down a column (finger, Pencil or mouse) ---------- */
+function startReorder(e, el, job) {
+  if (e.button > 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const col = el.parentElement;
+  const top = el.getBoundingClientRect().top;
+  reorder = { el, job, col, grab: e.clientY - top, startY: e.clientY, moved: false, stale: false };
+  el.classList.add('is-lifted');
+  // Listen on the document: moving the card in the DOM drops any pointer capture.
+  const move = (ev) => {
+    if (!reorder || ev.pointerId !== e.pointerId) return;
+    const y = ev.clientY;
+    if (!reorder.moved && Math.abs(y - reorder.startY) < 4) return;
+    reorder.moved = true;
+    const others = $$('.card:not(.is-done)', col).filter((c) => c !== el);
+    // Hit-test against where cards rest, not where a slide animation has them right now.
+    const colTop = col.getBoundingClientRect().top - col.offsetTop;
+    const target = others.find((o) => y < colTop + o.offsetTop + o.offsetHeight / 2);
+    const firstDone = $('.card.is-done', col);
+    const before = target || firstDone || null;
+    if (el.nextElementSibling !== before) {
+      const rects = new Map(others.map((o) => [o, o.getBoundingClientRect().top]));
+      col.insertBefore(el, before);
+      if (!reducedMotion()) {
+        others.forEach((o) => {
+          const dy = rects.get(o) - o.getBoundingClientRect().top;
+          if (dy) o.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 200, easing: 'cubic-bezier(0.32, 0.72, 0.24, 1)' });
+        });
+      }
+    }
+    el.style.transform = '';
+    const natural = el.getBoundingClientRect().top;
+    el.style.transform = `translateY(${y - reorder.grab - natural}px) scale(1.02)`;
+  };
+  const end = (ev) => {
+    if (ev.pointerId !== e.pointerId) return;
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', end);
+    document.removeEventListener('pointercancel', end);
+    const { moved, stale } = reorder;
+    reorder = null;
+    el.classList.remove('is-lifted');
+    el.style.transform = '';
+    if (!moved) { if (stale) render(); return; }
+    // The lift ends on the card, so the browser would treat it as a tap and open the job.
+    const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+    el.addEventListener('click', swallow, { capture: true, once: true });
+    setTimeout(() => el.removeEventListener('click', swallow, { capture: true }), 400);
+    const pos = (c) => jobs.find((j) => j.id === c?.dataset.id)?.position;
+    const prev = el.previousElementSibling;
+    const next = el.nextElementSibling?.classList.contains('is-done') ? null : el.nextElementSibling;
+    const p = pos(prev);
+    const n = pos(next);
+    let position;
+    if (p != null && n != null) position = (p + n) / 2;
+    else if (p != null) position = p + 1;
+    else if (n != null) position = n - 1;
+    else position = 0;
+    if (position === job.position) { if (stale) render(); return; }
+    updateJob(job.id, { position });
+  };
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
 }
 
 /* ---------- Complete toggle ---------- */
@@ -870,7 +974,11 @@ function openSheet(job = null) {
   $('#f-due').value = job?.due_at ? toLocalInput(job.due_at) : '';
   setSeg('f-priority', job?.priority ?? 'normal');
   setSeg('f-status', job?.status ?? 'todo');
-  deleteBtn.hidden = !job;
+  // On someone else's list you can only delete what you added; you can reorder anything.
+  deleteBtn.hidden = !job || (!onOwnList() && job.created_by !== meId);
+  $('#note-open-btn').hidden = !job?.note_id;
+  const top = $('#top-btn');
+  top.hidden = !job || job.status === 'done' || sortJobs(jobs.filter((j) => j.status === job.status))[0]?.id === job.id;
   disarmDelete();
   syncRemindSelect();
   if (job?.remind_at && job?.due_at) {
@@ -999,6 +1107,21 @@ $('#job-form').addEventListener('submit', async (e) => {
   loadJobs();
 });
 
+$('#note-open-btn').addEventListener('click', () => {
+  const job = jobs.find((j) => j.id === editingId);
+  if (!job?.note_id || !notesApi) return;
+  closeSheet();
+  notesApi.openNoteById(job.note_id);
+});
+
+$('#top-btn').addEventListener('click', () => {
+  const job = jobs.find((j) => j.id === editingId);
+  if (!job) return;
+  closeSheet();
+  updateJob(job.id, { position: topPosition(job.status) });
+  toast('Moved to the top');
+});
+
 function disarmDelete() {
   deleteBtn.classList.remove('confirm');
   deleteBtn.textContent = 'Delete job';
@@ -1073,7 +1196,7 @@ $$('.cards').forEach((col) => {
     const id = e.dataTransfer.getData('text/plain');
     const status = col.dataset.col;
     const job = jobs.find((j) => j.id === id);
-    if (job && job.status !== status) updateJob(id, { status });
+    if (job && job.status !== status) updateJob(id, { status, position: topPosition(status) });
   });
 });
 

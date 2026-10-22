@@ -6,7 +6,7 @@ const DEFAULT_DRAWING = () => ({ version: DRAWING_VERSION, strokes: [], pictures
 const MIN_ZOOM = .05;
 const MAX_ZOOM = 8;
 
-export function initNotes({ supabase, toast, url, anon }) {
+export function initNotes({ supabase, toast, url, anon, getLists = () => [], onJobsChanged = () => {} }) {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -115,10 +115,11 @@ export function initNotes({ supabase, toast, url, anon }) {
 
   async function loadNotes() {
     syncLabel.textContent = 'Syncing…';
-    const { data, error } = await supabase
-      .from('board_notes')
-      .select('*')
-      .order('updated_at', { ascending: false });
+    // Notes attached to jobs you can see are readable too; the notebook is only your own.
+    const { data: { session } } = await supabase.auth.getSession();
+    let query = supabase.from('board_notes').select('*');
+    if (session?.user?.id) query = query.eq('user_id', session.user.id);
+    const { data, error } = await query.order('updated_at', { ascending: false });
     if (error) {
       syncLabel.textContent = 'Offline — saved pages remain on this device';
       if (!loaded) notes = readLocalIndex();
@@ -256,8 +257,11 @@ export function initNotes({ supabase, toast, url, anon }) {
     }
   }
 
-  function openNote(note) {
+  function openNote(note, { readOnly = false, by = '' } = {}) {
     active = structuredClone(note);
+    active.readOnly = readOnly;
+    editor.classList.toggle('is-readonly', readOnly);
+    $('#note-title').readOnly = readOnly;
     const drawing = migrateDrawing(drawingFor(note));
     strokes = drawing.strokes;
     pictures = drawing.pictures;
@@ -284,20 +288,38 @@ export function initNotes({ supabase, toast, url, anon }) {
     editor.hidden = false;
     document.body.style.overflow = 'hidden';
     requestAnimationFrame(resizeCanvas);
-    setSaveState('', 'Saved');
+    setSaveState('', readOnly ? `${by ? `${by}'s note · ` : ''}view only` : 'Saved');
+  }
+
+  // Open a notepad from a job. Your own opens as normal; anyone else's opens to read.
+  async function openNoteById(id) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const { data: note, error } = await supabase.from('board_notes').select('*').eq('id', id).maybeSingle();
+    if (error || !note) { toast('Could not open that notepad'); return; }
+    const mine = note.user_id === session?.user?.id;
+    let by = '';
+    if (!mine) {
+      const { data: who } = await supabase.from('board_profiles').select('display_name').eq('user_id', note.user_id).maybeSingle();
+      by = who?.display_name || '';
+    }
+    openNote(note, { readOnly: !mine, by });
   }
 
   async function closeNote() {
     if (pictureGesture) finishPictureGesture();
     clearTimeout(saveTimer);
     if (active) await saveActive();
+    const wasReadOnly = active?.readOnly;
     active = null;
+    editor.classList.remove('is-readonly');
+    $('#note-title').readOnly = false;
+    $('#attach-panel').hidden = true;
     currentStroke = null;
     editor.hidden = true;
     $('#note-menu').hidden = true;
     closePops();
     document.body.style.overflow = '';
-    await loadNotes();
+    if (!wasReadOnly) await loadNotes();
   }
 
   function setSaveState(kind, label) {
@@ -307,14 +329,14 @@ export function initNotes({ supabase, toast, url, anon }) {
   }
 
   function scheduleSave() {
-    if (!active) return;
+    if (!active || active.readOnly) return;
     setSaveState('saving', 'Saving…');
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveActive, 650);
   }
 
   async function saveActive() {
-    if (!active) return;
+    if (!active || active.readOnly) return;
     active.title = $('#note-title').value.trim() || 'Untitled note';
     active.drawing = { version: DRAWING_VERSION, strokes, pictures, view: camera, theme: paperTheme, job_ids: linkedJobIds };
     active.clean_text = $('#clean-text').value;
@@ -556,7 +578,8 @@ export function initNotes({ supabase, toast, url, anon }) {
       }
       return;
     }
-    if (event.pointerType === 'mouse' && spaceHeld) {
+    // View only: a pen or mouse drags the page around instead of drawing.
+    if ((event.pointerType === 'mouse' && spaceHeld) || active?.readOnly) {
       mousePan = { pointerId: event.pointerId, start: screenPoint(event), camera: { ...camera } };
       return;
     }
@@ -1981,6 +2004,84 @@ export function initNotes({ supabase, toast, url, anon }) {
   $('#new-note').addEventListener('click', createNote);
   $('#note-clean').addEventListener('click', openCleanPanel);
   $('#note-add-job').addEventListener('click', addNoteToJobs);
+
+  /* ---------- Attach this notepad to a job (yours, or on a list shared with you) ---------- */
+  const attachPanel = $('#attach-panel');
+  let attachList = null;
+
+  async function openAttach() {
+    if (!active) return;
+    await saveActive();
+    const lists = getLists();
+    if (!lists.some((list) => list.id === attachList)) attachList = lists[0]?.id ?? null;
+    $('#attach-new-title').value = '';
+    attachPanel.hidden = false;
+    paintAttach();
+  }
+
+  async function paintAttach() {
+    const lists = getLists();
+    const switcher = $('#attach-lists');
+    switcher.hidden = lists.length < 2;
+    switcher.replaceChildren(...lists.map((list) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = list.label;
+      button.classList.toggle('is-active', list.id === attachList);
+      button.addEventListener('click', () => { attachList = list.id; paintAttach(); });
+      return button;
+    }));
+    const box = $('#attach-jobs');
+    box.replaceChildren();
+    let query = supabase.from('board_jobs').select('id, title, status, note_id').neq('status', 'done');
+    if (attachList) query = query.eq('user_id', attachList);
+    const { data, error } = await query.order('position', { ascending: true, nullsFirst: true });
+    if (error) { box.innerHTML = '<p class="attach-empty">Could not load the jobs.</p>'; return; }
+    if (!data?.length) { box.innerHTML = '<p class="attach-empty">No open jobs on this list yet.</p>'; return; }
+    data.forEach((job) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'attach-job';
+      const linked = job.note_id === active?.id;
+      button.classList.toggle('is-linked', linked);
+      const title = document.createElement('span');
+      title.textContent = job.title;
+      const tag = document.createElement('small');
+      tag.textContent = linked ? 'Attached' : (job.note_id ? 'Has a notepad' : (job.status === 'doing' ? 'Doing' : ''));
+      button.append(title, tag);
+      button.addEventListener('click', () => attachTo(job));
+      return box.append(button);
+    });
+  }
+
+  async function attachTo(job) {
+    if (!active) return;
+    if (job.note_id === active.id) { attachPanel.hidden = true; return; }
+    if (job.note_id && !confirm(`“${job.title}” already has a notepad. Swap it for this one?`)) return;
+    const { error } = await supabase.from('board_jobs').update({ note_id: active.id }).eq('id', job.id);
+    if (error) { toast('Could not attach that'); return; }
+    attachPanel.hidden = true;
+    toast('Notepad attached to the job');
+    onJobsChanged();
+  }
+
+  $('#note-attach').addEventListener('click', openAttach);
+  $('#attach-close').addEventListener('click', () => { attachPanel.hidden = true; });
+  attachPanel.addEventListener('click', (event) => { if (event.target === attachPanel) attachPanel.hidden = true; });
+  $('#attach-new').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!active) return;
+    const title = ($('#attach-new-title').value.trim() || $('#note-title').value.trim() || 'Notepad').slice(0, 140);
+    const { data: { session } } = await supabase.auth.getSession();
+    const record = { title, priority: 'normal', status: 'todo', note_id: active.id };
+    if (attachList && attachList !== session?.user?.id) record.user_id = attachList;
+    const { error } = await supabase.from('board_jobs').insert(record);
+    if (error) { toast('Could not add that job'); return; }
+    attachPanel.hidden = true;
+    const list = getLists().find((item) => item.id === attachList);
+    toast(record.user_id ? `New job on ${list?.label || 'their list'}, notepad attached` : 'New job added with this notepad');
+    onJobsChanged();
+  });
   $('#clean-close').addEventListener('click', () => { $('#clean-panel').hidden = true; });
   $('#clean-panel').addEventListener('click', (event) => { if (event.target.id === 'clean-panel') event.currentTarget.hidden = true; });
   $('#read-page').addEventListener('click', readPage);
@@ -2005,6 +2106,7 @@ export function initNotes({ supabase, toast, url, anon }) {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && openPop) { closePops(); return; }
     if (editor.hidden || event.target.matches?.('input, textarea')) return;
+    if (active?.readOnly) return;
     if (event.key === 'Escape' && tool === 'image') { setTool(previousInkTool); return; }
     if ((event.key === 'Delete' || event.key === 'Backspace') && tool === 'image' && selectedPicture) {
       event.preventDefault(); changePicture(); return;
@@ -2036,4 +2138,5 @@ export function initNotes({ supabase, toast, url, anon }) {
   window.addEventListener('blur', () => { spaceHeld = false; mousePan = null; });
 
   subscribeNotes();
+  return { openNoteById };
 }
